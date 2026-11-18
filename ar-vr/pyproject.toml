@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "ar-vr"
+version = "0.1.0"
+description = "Integration layer for ORVYNE personal virtual home"
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["backend"]

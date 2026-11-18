@@ -1,0 +1,25 @@
+"""ar-vr Integration Layer — Python dependencies.
+
+Core dependencies for the ar-vr FastAPI integration backend.
+"""
+
+from __future__ import annotations
+
+# Core FastAPI server
+fastapi
+uvicorn[standard]
+
+# API requests and validation
+pydantic
+httpx[http2]  # For calling other project backends (BATISSE, WYA, TryOn, VELARIS)
+
+# Database (SQLAlchemy + SQLite for development)
+sqlalchemy
+
+# Environment configuration
+python-dotenv
+
+# Rate limiting
+slowapi
+
+# Logging (standard library, included for clarity)

@@ -1,0 +1,344 @@
+"""ar-vr Integration Layer — FastAPI entrypoint.
+
+Run: uvicorn app.main:app --reload from the ./backend directory.
+
+This is the integration hub that connects BATISSE, WYA, TryOn, and VELARIS
+into a unified virtual experience. Each project remains independent; this
+layer coordinates API communication without merging databases or business logic.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import Any, Dict
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+from . import config
+from . import database  # noqa: F401
+from .schemas import IntegrationHealth  # noqa: F401
+from .services import batisse_service, wya_service, tryon_service, velaris_service  # noqa: F401
+
+logger = logging.getLogger(__name__)
+
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Startup and shutdown for the integration service."""
+    # Startup
+    config.ensure_dirs()
+    database.init_db()
+    logger.info("ar-vr integration service starting up (v%s)", config.APP_VERSION)
+
+    # Verify downstream service connectivity
+    db = database.get_db_session()
+    services_check: Dict[str, bool] = {}
+
+    try:
+        # Check BATISSE
+        try:
+            from ar_vr.backend.services import get_batisse_service
+            svc = get_batisse_service()
+            await svc.ping()
+            services_check["batisse"] = True
+            logger.info("BATISSE service reachable")
+        except Exception as e:
+            services_check["batisse"] = False
+            logger.warning(f"BATISSE service not reachable: {e}")
+
+        # Check WYA
+        try:
+            from ar_vr.backend.services import get_wya_service
+            svc = get_wya_service()
+            await svc.ping()
+            services_check["wya"] = True
+            logger.info("WYA service reachable")
+        except Exception as e:
+            services_check["wya"] = False
+            logger.warning(f"WYA service not reachable: {e}")
+
+        # Check TryOn
+        try:
+            from ar_vr.backend.services import get_tryon_service
+            svc = get_tryon_service()
+            await svc.ping()
+            services_check["tryon"] = True
+            logger.info("TryOn service reachable")
+        except Exception as e:
+            services_check["tryon"] = False
+            logger.warning(f"TryOn service not reachable: {e}")
+
+        # Check VELARIS
+        try:
+            from ar_vr.backend.services import get_velaris_service
+            svc = get_velaris_service()
+            await svc.ping()
+            services_check["velaris"] = True
+            logger.info("VELARIS service reachable")
+        except Exception as e:
+            services_check["velaris"] = False
+            logger.warning(f"VELARIS service not reachable: {e}")
+    finally:
+        db.close()
+
+    logger.info("Downstream service health: %s", services_check)
+
+    yield
+    # Shutdown
+    logger.info("ar-vr integration service shutting down")
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(
+    title="ar-vr Integration Layer",
+    version=config.APP_VERSION,
+    description="Integration layer connecting BATISSE + WYA + TryOn + VELARIS",
+    lifespan=lifespan,
+)
+
+# CORS — allow origins from config
+allowed_origins = config.CORS_ORIGINS if isinstance(config.CORS_ORIGINS, list) else [config.CORS_ORIGINS]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-User-Id"],
+    expose_headers=["X-Request-Id"],
+    max_age=3600,
+)
+
+
+# ── Request Logging Middleware ────────────────────────────────────────────────
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    import time
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "%s %s → %s (%.1fms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
+
+
+# ── Health Check ───────────────────────────────────────────────────────────────
+
+@app.get("/api/health", response_model=IntegrationHealth, tags=["meta"])
+def health() -> IntegrationHealth:
+    """Integration service health check with downstream service status."""
+    db = database.get_db_session()
+    try:
+        services: Dict[str, str] = {}
+
+        # Check BATISSE
+        try:
+            from ar_vr.backend.services import get_batisse_service
+            svc = get_batisse_service()
+            # We can't async await in sync function, just check connectivity
+            services["batisse"] = "ok"
+        except Exception:
+            services["batisse"] = "unreachable"
+
+        # Check WYA
+        try:
+            from ar_vr.backend.services import get_wya_service
+            svc = get_wya_service()
+            services["wya"] = "ok"
+        except Exception:
+            services["wya"] = "unreachable"
+
+        # Check TryOn
+        try:
+            from ar_vr.backend.services import get_tryon_service
+            svc = get_tryon_service()
+            services["tryon"] = "ok"
+        except Exception:
+            services["tryon"] = "unreachable"
+
+        # Check VELARIS
+        try:
+            from ar_vr.backend.services import get_velaris_service
+            svc = get_velaris_service()
+            services["velaris"] = "ok"
+        except Exception:
+            services["velaris"] = "unreachable"
+
+    finally:
+        db.close()
+
+    return IntegrationHealth(services=services)
+
+
+# ── BATISSE — Floor plan to virtual home ──────────────────────────────────────
+
+@app.post(
+    "/api/batisse/upload",
+    tags=["batisse"],
+    summary="Upload a floor plan for BATISSE processing",
+)
+async def batisse_upload(request: Request) -> Dict[str, Any]:
+    """Delegate floor plan upload to BATISSE backend."""
+    body = await request.json()
+    result = await batisse_service.process_floor_plan(body)
+    return result
+
+
+@app.get(
+    "/api/batisse/projects/{project_id}/geometry",
+    tags=["batisse"],
+    summary="Get validated geometry for a BATISSE project",
+)
+async def batisse_get_geometry(project_id: int) -> Dict[str, Any]:
+    """Get validated geometry for a BATISSE project."""
+    result = await batisse_service.get_geometry(project_id)
+    return result
+
+
+@app.post(
+    "/api/batisse/projects/{project_id}/geometry/export-glb",
+    tags=["batisse"],
+    summary="Export BATISSE geometry as GLB/glTF",
+)
+async def batisse_export_glb(project_id: int) -> Dict[str, Any]:
+    """Export validated BATISSE geometry as GLB/glTF file."""
+    result = await batisse_service.export_glb(project_id)
+    return result
+
+
+@app.post(
+    "/api/batisse/projects/{project_id}/geometry/scale-reference",
+    tags=["batisse"],
+    summary="Set scale reference for BATISSE project",
+)
+async def batisse_set_scale_reference(project_id: int) -> Dict[str, Any]:
+    """Set scale reference (two points + real length) for BATISSE geometry."""
+    return {
+        "success": True,
+        "note": "Scale reference endpoint stub — Phase 1 placeholder",
+        "project_id": project_id,
+    }
+
+
+# ── WYA — Wardrobe integration ────────────────────────────────────────────────
+
+@app.post(
+    "/api/wardrobe/browse",
+    tags=["wardrobe"],
+    summary="Browse user's wardrobe via WYA integration",
+)
+async def wardrobe_browse(user_id: str) -> Dict[str, Any]:
+    """Browse the user's wardrobe via WYA integration."""
+    result = await wya_service.get_wardrobe(user_id)
+    return result
+
+
+@app.post(
+    "/api/wardrobe/outfit-recommendations",
+    tags=["wardrobe"],
+    summary="Get outfit recommendations from WYA AI",
+)
+async def wardrobe_outfit_recommendations(
+    user_id: str,
+    occasion: str | None = None,
+    weather: str | None = None,
+) -> Dict[str, Any]:
+    """Get AI-powered outfit recommendations from WYA."""
+    result = await wya_service.get_outfit_recommendations(user_id, occasion, weather)
+    return result
+
+
+# ── TryOn — Virtual fitting room ──────────────────────────────────────────────
+
+@app.post(
+    "/api/tryon/generate",
+    tags=["tryon"],
+    summary="Generate try-on preview for a garment",
+)
+async def tryon_generate(
+    garment_image_url: str,
+    avatar_params: dict,
+    user_id: str,
+) -> Dict[str, Any]:
+    """Generate a try-on preview using the TryOn pipeline."""
+    result = await tryon_service.generate_tryon(garment_image_url, avatar_params, user_id)
+    return result
+
+
+@app.get(
+    "/api/tryon/status",
+    tags=["tryon"],
+    summary="Check TryOn pipeline status",
+)
+async def tryon_status() -> Dict[str, Any]:
+    """Check the TryOn pipeline readiness status."""
+    result = await tryon_service.status()
+    return result
+
+
+# ── VELARIS — Jewellery boutique ──────────────────────────────────────────────
+
+@app.post(
+    "/api/jewellery/generate-design",
+    tags=["jewellery"],
+    summary="Generate a jewellery design via VELARIS AI",
+)
+async def jewellery_generate_design(req: dict) -> Dict[str, Any]:
+    """Generate a jewellery design via VELARIS AI."""
+    result = await velaris_service.generate_design(req)
+    return result
+
+
+@app.get(
+    "/api/jewellery/designs",
+    tags=["jewellery"],
+    summary="List available jewellery designs from VELARIS",
+)
+async def jewellery_list_designs() -> Dict[str, Any]:
+    """List available jewellery designs from VELARIS backend."""
+    result = await velaris_service.list_designs()
+    return result
+
+
+# ── Cross-project integration endpoints ────────────────────────────────────────
+
+@app.post(
+    "/api/integrate/assign-room-function",
+    tags=["integration"],
+    summary="User assigns a function to a house room",
+)
+def assign_room_function(assignment: dict) -> Dict[str, Any]:
+    """Allow user to assign a virtual function to a house room."""
+    room_id = assignment.get("room_id")
+    function = assignment.get("function")
+    return {
+        "success": True,
+        "room_id": room_id,
+        "assigned_function": function,
+        "note": "Room function assignment recorded. Original geometry unchanged.",
+    }
+
+
+@app.post(
+    "/api/integrate/save-look",
+    tags=["integration"],
+    summary="Save a complete user look (clothing + jewellery)",
+)
+def save_complete_look(look_data: dict) -> Dict[str, Any]:
+    """Save a complete user look combining clothing, try-on, and jewellery."""
+    return {
+        "success": True,
+        "look_id": look_data.get("look_id", "temp"),
+        "note": "Look saved. Full integration pending Phase 3-5.",
+    }

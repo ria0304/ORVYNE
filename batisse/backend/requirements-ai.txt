@@ -1,0 +1,4 @@
+# Optional, Phase 5 only (CubiCasa5K-style segmentation). Not needed for the deterministic pipeline.
+-r requirements.txt
+torch>=2.2
+torchvision>=0.17

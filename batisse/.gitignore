@@ -1,0 +1,51 @@
+# ---- Python / backend ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Runtime data (uploads, rendered plans, SQLite DB) - see backend/app/config.py
+backend/data/
+data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Optional AI model weights (requirements-ai.txt)
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
+# ---- Frontend ----
+node_modules/
+frontend/dist/
+dist/
+*.tsbuildinfo
+.vite/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- Env / secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+node_modules/

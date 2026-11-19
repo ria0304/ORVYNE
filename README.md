@@ -106,7 +106,7 @@ Chat interface over WYA's API. Intent classification plus smart replies, with ou
 - **Gateways** requests to Batisse, WYA, TryOn and Velaris through one API
 - **Adapts** each project through a dedicated service class (`httpx` async client), translating shared schemas into project-specific calls
 - **Shares schemas** — `UserReference`, `RoomMetadata`, `ScaleInfo`, `AssetReference`, `RoomAssignment`
-- **Stores only coordination metadata** — user ↔ Batisse project link and room-function assignments, in its own SQLite DB (`arvr_integration.db`)
+- **Reserves a coordination DB** — its own SQLite file (`arvr_integration.db`) with one `integration_metadata` table, created on startup. **No route writes to it yet**: room assignments and saved looks are acknowledged but not persisted
 - **Leaves the originals alone** — each project keeps its own code, API and database
 
 ### Integration endpoints
@@ -117,15 +117,22 @@ Chat interface over WYA's API. Intent classification plus smart replies, with ou
 | `POST` | `/api/batisse/upload` | Batisse `POST /api/projects` |
 | `GET` | `/api/batisse/projects/{id}/geometry` | Batisse validated geometry |
 | `POST` | `/api/batisse/projects/{id}/geometry/export-glb` | Batisse GLB export |
-| `POST` | `/api/batisse/projects/{id}/geometry/scale-reference` | *Stub (Phase 1)* |
+| `POST` | `/api/batisse/projects/{id}/geometry/scale-reference` | *Stub — returns a placeholder, does not call Batisse* |
 | `POST` | `/api/wardrobe/browse` | WYA `GET /api/user/wardrobe` |
 | `POST` | `/api/wardrobe/outfit-recommendations` | WYA `GET /api/ai/outfit-score` |
 | `POST` | `/api/tryon/generate` | TryOn `POST /api/tryon` |
-| `GET` | `/api/tryon/status` | TryOn readiness |
+| `GET` | `/api/tryon/status` | *Hard-coded response — does not contact TryOn* |
 | `POST` | `/api/jewellery/generate-design` | Velaris `POST /api/generate-design` |
 | `GET` | `/api/jewellery/designs` | Velaris `GET /api/trends` |
-| `POST` | `/api/integrate/assign-room-function` | Local — assign a function to a room |
-| `POST` | `/api/integrate/save-look` | Local — save clothing + jewellery look *(stub)* |
+| `POST` | `/api/luna/chat` | WYA `/luna-api/chat` — **currently broken**, see Known Limitations |
+| `POST` | `/api/navigation/set-position/{user_id}` | *Stub — echoes the position, stores nothing* |
+| `POST` | `/api/navigation/set-room/{user_id}/{room_id}` | *Stub — echoes the room, stores nothing* |
+| `GET` | `/api/navigation/get-position/{user_id}` | *Stub — always returns the origin* |
+| `POST` | `/api/room/interact/{user_id}/{room_id}/{action}` | *Stub — echoes the action* |
+| `POST` | `/api/room/door/open/{user_id}/{from_room}/{to_room}` | *Stub — echoes the request* |
+| `POST` | `/api/room/window/toggle/{user_id}/{room_id}` | *Stub — echoes the request* |
+| `POST` | `/api/integrate/assign-room-function` | *Stub — echoes the assignment, does not persist it* |
+| `POST` | `/api/integrate/save-look` | *Stub — echoes a look id, does not persist it* |
 
 Room functions: `bedroom`, `living_room`, `kitchen`, `bathroom`, `dining_room`, `storage`, `spare_bedroom`, `study`, `balcony`, `hallway`, `other`.
 
@@ -163,7 +170,7 @@ flowchart LR
     classDef green  fill:#EAF3DE,stroke:#3B6D11,color:#173404
 ```
 
-Solid arrows are implemented in `ar-vr/backend`. The unified 3D front end (dotted / top-left) is planned — see [Known Limitations](#known-limitations).
+Solid arrows exist in `ar-vr/backend`, but several of those routes are stubs (see the endpoint table). The unified 3D front end (dotted / top-left) is only a scaffold: `ar-vr/frontend` has a router shell and buttons that call the gateway, and does not yet build or render a 3D scene — see [Known Limitations](#known-limitations).
 
 ---
 
@@ -173,7 +180,8 @@ Solid arrows are implemented in `ar-vr/backend`. The unified 3D front end (dotte
 - FastAPI + Uvicorn, Pydantic schemas
 - `httpx` async clients for service-to-service calls
 - SQLAlchemy + SQLite (PostgreSQL via `DATABASE_URL`)
-- `python-dotenv` config, `slowapi` (listed dependency), CORS allowlist
+- `python-dotenv` config, `slowapi` (listed dependency, not wired), CORS allowlist
+- `ar-vr/frontend`: Vite + `three` scaffold (React and `react-router-dom` are imported but not yet declared in `package.json`)
 
 **Frontends (per project)**
 - React + TypeScript + Vite, Tailwind CSS
@@ -197,11 +205,17 @@ ORVYNE/
 ├── ar-vr/                            # ★ Main code — ORVYNE integration layer
 │   ├── README.md
 │   ├── pyproject.toml
+│   ├── frontend/                     # Scaffold only — Vite app, port 3000
+│   │   ├── package.json
+│   │   ├── vite.config.ts
+│   │   └── src/
+│   │       ├── main.tsx
+│   │       └── App.tsx               # Routes: /batisse /wardrobe /tryon /jewellery … calling the gateway
 │   ├── backend/
-│   │   ├── config.py                 # Env config (duplicate of app/config.py)
+│   │   ├── config.py                 # Older, shorter copy of app/config.py (no WYA block, no ensure_dirs)
 │   │   ├── requirements.txt          # fastapi, uvicorn, pydantic, httpx, sqlalchemy, python-dotenv, slowapi
 │   │   └── app/
-│   │       ├── main.py               # FastAPI gateway — all /api/* routes
+│   │       ├── main.py               # FastAPI gateway — all /api/* routes (health, batisse, navigation, room, wardrobe, tryon, jewellery, luna, integrate)
 │   │       ├── config.py             # Service URLs, JWT secret, DB URL, CORS, asset dirs
 │   │       ├── database.py           # SQLAlchemy engine + IntegrationMetadata table
 │   │       ├── schemas.py            # UserReference, RoomMetadata, AssetReference, …
@@ -211,7 +225,7 @@ ORVYNE/
 │   │           ├── tryon_service.py
 │   │           └── velaris_service.py
 │   └── tests/
-│       └── test_integration.py       # Health + endpoint tests
+│       └── test_integration.py       # Health, endpoint and schema tests (see Run the tests)
 │
 ├── batisse/                          # Floor plan → 3D dollhouse
 │   ├── DEVLOG.md
@@ -321,6 +335,8 @@ cd Velaris-From-Inspiration-to-Jewellery-Design-main && npm install && npm run d
 cd luna-stylist-main && npm install && npm run dev     # Luna chat
 ```
 
+The `ar-vr/frontend` scaffold (`npm install && npm run dev`, port 3000) is **not** in this list on purpose: it does not build yet, and it points at `http://127.0.0.1:8001` (Luna's port) instead of the gateway's `8000`. Fix both before using it.
+
 Each frontend runs on its own default port; if two collide on the same machine, pass `--port` to Vite.
 
 ---
@@ -347,8 +363,10 @@ curl -X POST http://localhost:8000/api/jewellery/generate-design \
 ```bash
 pip install pytest
 cd ar-vr
-pytest tests/
+PYTHONPATH=backend pytest tests/
 ```
+
+Last run with no downstream services started: **12 passed, 11 failed**. The failures are the Batisse and Velaris route tests (the gateway raises when the target is down instead of returning a mapped error) and the schema tests (import path).
 
 ---
 
@@ -357,7 +375,8 @@ pytest tests/
 | Problem | Fix |
 |---|---|
 | Services all fail to respond | Batisse, WYA and TryOn all default to `:8000` — give each its own port and set the matching `*_BASE_URL` |
-| `/api/health` shows `unreachable` | See Known Limitations — the health route does not actually ping downstream services yet |
+| `/api/health` shows `unreachable` for every service | Expected today — the route imports from a non-importable path and never pings anything. Check the startup log lines (`… service reachable`) instead, and note those are unreliable too (see Known Limitations) |
+| `/api/luna/chat` returns `Luna backend unavailable` | Known bug — the route references an undefined `WYA_BASE_URL` |
 | `ModuleNotFoundError` in a project | Run `pip install -r requirements.txt` inside that project's folder |
 | Batisse OCR does nothing | Install the Tesseract binary (`pytesseract` is only a wrapper) |
 | Velaris says `OPENROUTER_API_KEY` not set | Add it to that project's `.env` and restart |
@@ -393,7 +412,10 @@ The four `*_BASE_URL` defaults are identical, so they are "required" in practice
 | TryOn — cutouts, mannequin, outfit builder, optional CatVTON | ✅ Standalone project |
 | Velaris — jewellery design, CAD, PDF, DXF | ✅ Standalone project |
 | Luna — conversational styling over WYA | ✅ Standalone project |
-| `ar-vr` gateway, service adapters, shared schemas, coordination DB | 🟡 Phase 1 foundation |
+| `ar-vr` gateway, service adapters, shared schemas | 🟡 Phase 1 foundation — runs, but health, Luna and several adapter calls are broken |
+| `ar-vr` navigation / room / door / window routes | 🟡 Stubs — return success, store nothing |
+| `ar-vr/frontend` | 🟡 Scaffold — does not build yet |
+| Coordination DB writes (room assignments, saved looks) | 🔲 Table exists, nothing writes to it |
 | Cross-project user identity / auth coordination | 🔲 Planned |
 | Unified 3D virtual-home front end (walkthrough, room navigation) | 🔲 Planned |
 | Wardrobe / fitting-room / boutique placed inside the 3D home | 🔲 Planned |
@@ -404,14 +426,23 @@ The four `*_BASE_URL` defaults are identical, so they are "required" in practice
 
 ## Known Limitations
 
-- **The unified 3D experience is not built yet.** `ar-vr/` today is a backend integration layer. The planned `frontend/`, `blender/`, `ar/` and `vr/` directories described in `ar-vr/README.md` do not exist in the repository. Walking through your home with keyboard and mouse is the target; right now the 3D dollhouse viewer lives in Batisse's own frontend.
+- **The unified 3D experience is not built yet.** `ar-vr/frontend` now exists, but it is a scaffold: no 3D scene, no room navigation UI, and the walkthrough you see in the pitch is the target. The planned `blender/`, `ar/` and `vr/` directories described in `ar-vr/README.md` still do not exist. The only working 3D dollhouse viewer is in Batisse's own frontend.
+- **`ar-vr/frontend` does not build.**
+  - `react`, `react-dom` and `react-router-dom` are imported but missing from `package.json`.
+  - `main.tsx` uses `React.StrictMode` without importing `React`.
+  - `App.tsx` passes functions as `<Route element={...}>`, which React Router does not accept, and every page fires its API call on mount *and* on button click.
+  - It targets `http://127.0.0.1:8001`, which is Luna's port, not the gateway's.
+  - Request bodies do not match the gateway signatures (for example `/api/tryon/generate` expects `garment_image_url`, `avatar_params` and `user_id`).
 - **Gateway has known bugs to fix before it works end to end.**
-  - `main.py` imports adapters from `ar_vr.backend.services`, which is not an importable package path, so `/api/health` reports every service as `unreachable` and startup pings are skipped.
-  - `/api/tryon/status` calls `tryon_service.status()`, which does not exist; the adapter method is `get_tryon_status()` and it references an undefined `user_id`.
-  - Several routes call adapter functions on the module (for example `batisse_service.process_floor_plan`) rather than on the service instance.
-  - Adapters use hard-coded base URLs instead of the values in `config.py`.
+  - `/api/health` imports from `ar_vr.backend.services`, which is not importable, so it reports every service `unreachable` regardless of reality.
+  - Startup health checks are misleading: adapter `ping()` swallows errors and returns `False`, but the lifespan code ignores the return value and logs "reachable" anyway; TryOn is marked reachable without any check.
+  - `/api/tryon/status` is hard-coded (`healthy`) and never contacts TryOn; the adapter method `get_tryon_status()` it was meant to call references an undefined `user_id`.
+  - `/api/luna/chat` references `WYA_BASE_URL`, which is not defined in `main.py`, so it always returns an error reply. It also posts to `/luna-api/chat`, while WYA's Luna router is mounted at `/api/luna/chat`.
+  - Adapters use hard-coded `http://127.0.0.1:8000` instead of the values in `config.py`.
   - The `POST` wardrobe and try-on routes declare plain query parameters, while the tests send JSON bodies.
+  - Navigation, room, door, window, assign-room-function and save-look routes are stubs. They return `success: true` without storing anything, so a client cannot tell them from working endpoints.
   - `models.py` and `api/` listed in `ar-vr/README.md` are not present; `slowapi` is installed but not wired.
+  - The test suite is red when no downstream services are running (12 passed, 11 failed).
 - **Service URLs collide by default.** All four adapters default to `127.0.0.1:8000`.
 - **Auth is not coordinated.** Each project keeps its own auth: WYA uses JWT, TryOn uses a guest `X-User-Id` header. `INTEGRATION_JWT_SECRET` is configured but unused, and its default must not be used in production.
 - **Some adapters call endpoints the target does not expose under that name** — for example, `find_similar` calls `/api/similar` while Velaris serves `/api/find-similar`, and `list_designs` reads `/api/trends`, which is trend data, not saved designs.
@@ -427,7 +458,8 @@ The four `*_BASE_URL` defaults are identical, so they are "required" in practice
 
 | Feature | Why |
 |---|---|
-| Fix and finish the `ar-vr` gateway | Working health checks, correct adapter calls, config-driven URLs |
+| Fix and finish the `ar-vr` gateway | Working health checks, correct adapter calls, config-driven URLs, real persistence behind the navigation and room routes |
+| Make `ar-vr/frontend` build and render | Declare dependencies, fix routing, point at the gateway, replace button demos with a Three.js scene |
 | Single sign-in across projects | One identity for Batisse, WYA, TryOn, Velaris and Luna |
 | Unified 3D front end (React + Three.js) | Walk through the user's own home with keyboard and mouse |
 | Room functions in 3D | Bedroom → wardrobe, study → jewellery boutique, hallway → fitting room |

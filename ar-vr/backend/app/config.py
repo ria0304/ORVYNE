@@ -67,6 +67,11 @@ DATABASE_URL = os.getenv(
     "sqlite:///./arvr_integration.db",
 )
 
+# ─── WYA API ─────────────────────────────────────────────────────────────────
+
+# WYA backend URL (local development or production)
+WYA_BASE_URL = os.getenv("WYA_BASE_URL", "http://127.0.0.1:8000")
+
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 
 # Frontend origins that can call the integration API

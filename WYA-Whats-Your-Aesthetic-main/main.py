@@ -26,29 +26,13 @@ logger = get_logger(__name__)
 # ── Config ────────────────────────────────────────────────────────────────────
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
-# Main WYA frontend CloudFront domain
-CLOUDFRONT_DOMAIN = os.getenv(
-    "CLOUDFRONT_DOMAIN", 
-    "dsbml6kwxecah.cloudfront.net"
-)
-
-# Luna frontend CloudFront domain (added to fix CORS)
-LUNA_CLOUDFRONT_DOMAIN = os.getenv(
-    "LUNA_CLOUDFRONT_DOMAIN",
-    "d34nojihupg1cl.cloudfront.net"
-)
-
 # ── CORS Origins ──────────────────────────────────────────────────────────────
-allowed_origins: list[str] = [
-    # WYA frontend
-    f"https://{CLOUDFRONT_DOMAIN}",
-    
-    # Luna frontend - FIXED: added this to allow CORS from Luna
-    f"https://{LUNA_CLOUDFRONT_DOMAIN}",
-    
-    # Legacy S3 deployment (kept for backward compatibility)
-    "http://luna-stylist.s3-website.ap-south-1.amazonaws.com",
-]
+# Production origins from .env (comma-separated)
+extra = os.getenv("EXTRA_ORIGINS", "")
+if extra:
+    allowed_origins = [o.strip() for o in extra.split(",") if o.strip()]
+else:
+    allowed_origins = []
 
 # Development origins (only if DEBUG=true)
 if DEBUG:
@@ -58,11 +42,6 @@ if DEBUG:
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
-
-# Extra origins from .env (e.g., EXTRA_ORIGINS=https://a.com,https://b.com)
-extra = os.getenv("EXTRA_ORIGINS", "")
-if extra:
-    allowed_origins += [o.strip() for o in extra.split(",") if o.strip()]
 
 logger.info("CORS origins configured: %d domains", len(allowed_origins))
 logger.info("Allowed origins: %s", allowed_origins)

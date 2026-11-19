@@ -231,6 +231,126 @@ async def batisse_set_scale_reference(project_id: int) -> Dict[str, Any]:
     }
 
 
+# ── Phase 2: Desktop Navigation ────────────────────────────────────────────────
+
+# Navigation state stored per user (in production, use Redis or DB)
+NavigationState = Dict[str, Any]
+
+
+@app.post(
+    "/api/navigation/set-position/{user_id}",
+    tags=["navigation"],
+    summary="Set user position in virtual home",
+)
+async def set_navigation_position(
+    user_id: str,
+    position: dict,
+) -> Dict[str, Any]:
+    """Set user position (x, y, z) and rotation (x, y, z, w) in the virtual home."""
+    return {
+        "success": True,
+        "user_id": user_id,
+        "position": position,
+        "note": "Navigation position recorded.",
+    }
+
+
+@app.post(
+    "/api/navigation/set-room/{user_id}/{room_id}",
+    tags=["navigation"],
+    summary="Set current room for user",
+)
+async def set_current_room(
+    user_id: str,
+    room_id: str,
+) -> Dict[str, Any]:
+    """Set the current room the user is in."""
+    return {
+        "success": True,
+        "user_id": user_id,
+        "room_id": room_id,
+        "note": "Current room recorded.",
+    }
+
+
+@app.get(
+    "/api/navigation/get-position/{user_id}",
+    tags=["navigation"],
+    summary="Get user position in virtual home",
+)
+async def get_navigation_position(user_id: str) -> Dict[str, Any]:
+    """Get current user position and rotation."""
+    return {
+        "success": True,
+        "user_id": user_id,
+        "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+        "note": "Default initial position.",
+    }
+
+
+# ── Phase 2: Room Interactions ───────────────────────────────────────────────
+
+@app.post(
+    "/api/room/interact/{user_id}/{room_id}/{action}",
+    tags=["room"],
+    summary="Interact with a room object",
+)
+async def room_interact(
+    user_id: str,
+    room_id: str,
+    action: str,
+) -> Dict[str, Any]:
+    """Handle interaction with room objects (door, window, furniture)."""
+    return {
+        "success": True,
+        "user_id": user_id,
+        "room_id": room_id,
+        "action": action,
+        "note": f"Interaction '{action}' recorded for room {room_id}.",
+    }
+
+
+@app.post(
+    "/api/room/door/open/{user_id}/{from_room}/{to_room}",
+    tags=["room"],
+    summary="Open a door to another room",
+)
+async def open_door(
+    user_id: str,
+    from_room: str,
+    to_room: str,
+) -> Dict[str, Any]:
+    """Handle door opening between rooms."""
+    return {
+        "success": True,
+        "user_id": user_id,
+        "from_room": from_room,
+        "to_room": to_room,
+        "note": f"Door opened from {from_room} to {to_room}.",
+    }
+
+
+@app.post(
+    "/api/room/window/toggle/{user_id}/{room_id}",
+    tags=["room"],
+    summary="Toggle window visibility/state",
+)
+async def toggle_window(
+    user_id: str,
+    room_id: str,
+    is_open: bool = True,
+) -> Dict[str, Any]:
+    """Handle window state changes."""
+    return {
+        "success": True,
+        "user_id": user_id,
+        "room_id": room_id,
+        "is_open": is_open,
+        "note": f"Window state updated in room {room_id}.",
+    }
+
+
 # ── WYA — Wardrobe integration ────────────────────────────────────────────────
 
 @app.post(

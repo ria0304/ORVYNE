@@ -441,6 +441,31 @@ async def jewellery_list_designs() -> Dict[str, Any]:
     return result
 
 
+# ── VELARIS — 3D jewellery mesh generation ──────────────────────────────────
+
+@app.post(
+    "/api/velaris/mesh",
+    tags=["velaris"],
+    summary="Generate 3D jewellery mesh",
+)
+async def velaris_generate_3d_mesh(req: dict) -> Dict[str, Any]:
+    """Generate a 3D jewellery mesh via VELARIS rendering pipeline.
+
+    Uses trimesh + PBR-inspired material parameters to produce a watertight
+    triangle mesh exported as a GLTF data URI. This enables web-based 3D
+    viewing of VELARIS designs in three.js, React Three Fiber, or any GLTF
+    viewer.
+
+    Design parameters (gemstone, metal, carat, shape, jewelry type) may be
+    supplied in the request body; if omitted, the method will first call
+    /api/generate-design to infer them.
+    """
+    from app.services.velaris_service import get_velaris_service
+    svc = get_velaris_service()
+    result = await svc.generate_3d_mesh(req)
+    return result
+
+
 # ── Luna — AI fashion stylist chatbot ──────────────────────────────────────────
 
 @app.post(

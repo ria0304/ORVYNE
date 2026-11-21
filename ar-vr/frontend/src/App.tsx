@@ -33,6 +33,13 @@ function useLoadingState(initial: boolean = false) {
   return { loading, setLoading }
 }
 
+// ─── Scene types for clear distinction ───
+enum SceneType {
+  ACTUAL_BATISSE = 'actual_batisse',
+  GEOMETRY_DERIVED = 'geometry_derived',
+  PLACEHOLDER = 'placeholder',
+}
+
 // ─── Scene management for Three.js ───
 function useThreeScene(initialUrl: string | null) {
   const [scene, setScene] = useState<THREE.Scene | null>(null)
@@ -44,6 +51,7 @@ function useThreeScene(initialUrl: string | null) {
     const r = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
     r.setSize(400, 400)
     r.setPixelRatio(window.devicePixelRatio)
+    ;(renderer as THREE.WebGLRenderer).setClearColor(0x0a0e17, 1)
     document.getElementById('three-container')!.appendChild(canvas)
     return r
   })
@@ -54,15 +62,25 @@ function useThreeScene(initialUrl: string | null) {
       scene = new THREE.Scene()
       scene.background = new THREE.Color(0x0a0e17)
     }
-    camera.position.z = 5
-    ;(renderer as THREE.WebGLRenderer).setPixelRatio(window.devicePixelRatio)
-    ;(renderer as THREE.WebGLRenderer).setSize(400, 400)
     
+    // Add lighting
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5)
     scene.add(ambientLight)
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
     dirLight.position.set(5, 5, 5)
     scene.add(dirLight)
+    
+    // Fit camera to bounds
+    const fitCameraToBounds = () => {
+      if (scene.children.length > 0) {
+        const box = new THREE.Box3().setFromObject(scene)
+        const center = box.getCenter(new THREE.Vector3())
+        const size = box.getSize(new THREE.Vector3())
+        camera.position.set(center.x, center.y, center.z + size.z * 1.5)
+        camera.lookAt(center.x, center.y, center.z)
+      }
+    }
+    fitCameraToBounds()
     
     const animate = () => {
       ;(renderer as THREE.WebGLRenderer).render(scene, camera)
@@ -79,16 +97,144 @@ function useThreeScene(initialUrl: string | null) {
   return { scene, camera, renderer, controls }
 }
 
-// ─── Load GLB model ───
-async function loadGLB(url: string): Promise<THREE.Group | null> {
+// ─── Create actual BATISSE GLB scene from GLTF data ───
+async function loadActualBatisseGLB(glbBase64: string): Promise<THREE.Group | null> {
   const loader = new GLTFLoader()
   try {
+    const byteCharacters = atob(glbBase64)
+    const byteNumbers = new Uint8Array(byteCharacters.length)
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i)
+    }
+    const blob = new Blob([byteNumbers], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    
     const gltf = await loader.loadAsync(url)
+    URL.revokeObjectURL(url)
     return gltf.scene
   } catch (e) {
-    console.error('Failed to load GLB:', e)
+    console.error('Failed to load actual BATISSE GLB:', e)
     return null
   }
+}
+
+// ─── Create geometry-derived scene from BATISSE data ───
+function createGeometryDerivedScene(rooms: any[]): THREE.Group {
+  const group = new THREE.Group()
+  
+  // Floor
+  const floorGeometry = new THREE.PlaneGeometry(10, 10)
+  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial)
+  floor.rotation.x = -Math.PI / 2
+  floor.position.y = -0.01
+  group.add(floor)
+  
+  // Walls based on room data
+  if (rooms) {
+    const wallGeometry = new THREE.BoxGeometry(8, 3, 0.5)
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x3d4a5e })
+    
+    rooms.forEach((room: any, idx: number) => {
+      const wall = new THREE.Mesh(wallGeometry, wallMaterial)
+      // Place walls based on room index
+      const angle = (idx / Math.max(rooms.length, 1)) * Math.PI * 2
+      const distance = 3
+      wall.position.set(
+        Math.cos(angle) * distance,
+        1.5,
+        Math.sin(angle) * distance
+      )
+      wall.rotation.y = angle + Math.PI / 2
+      group.add(wall)
+      
+      // Room label sphere
+      const labelGeometry = new THREE.SphereGeometry(0.2, 16, 16)
+      const labelMaterial = new THREE.MeshStandardMaterial({ color: 0xef476f })
+      const label = new THREE.Mesh(labelGeometry, labelMaterial)
+      label.position.set(
+        Math.cos(angle) * 3.5,
+        1.5,
+        Math.sin(angle) * 3.5
+      )
+      group.add(label)
+    })
+  }
+  
+  // Ceiling
+  const ceilingGeometry = new THREE.BoxGeometry(10, 0.5, 8)
+  const ceilingMaterial = new THREE.MeshStandardMaterial({ color: 0x3d4a5e })
+  const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial)
+  ceiling.position.y = 3
+  group.add(ceiling)
+  
+  // Placeholder furniture spheres
+  const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16)
+  const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xef476f })
+  const sphereCount = rooms ? rooms.length : 0
+  for (let i = 0; i < Math.min(sphereCount, 8); i++) {
+    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
+    const angle = (i / Math.max(rooms.length, 1)) * Math.PI * 2
+    const distance = 4 + Math.random()
+    sphere.position.set(
+      Math.cos(angle) * distance,
+      1 + Math.random(),
+      Math.sin(angle) * distance
+    )
+    group.add(sphere)
+  }
+  
+  return group
+}
+
+// ─── Create placeholder scene ───
+function createPlaceholderScene(): THREE.Group {
+  const group = new THREE.Group()
+  
+  // Floor
+  const floorGeometry = new THREE.PlaneGeometry(10, 10)
+  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial)
+  floor.rotation.x = -Math.PI / 2
+  floor.position.y = -0.01
+  group.add(floor)
+  
+  // Walls
+  const wallGeometry = new THREE.BoxGeometry(8, 3, 0.5)
+  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x3d4a5e })
+  const wall1 = new THREE.Mesh(wallGeometry, wallMaterial)
+  wall1.position.set(-4, 1.5, 0)
+  group.add(wall1)
+  const wall2 = new THREE.Mesh(wallGeometry, wallMaterial)
+  wall2.rotation.y = Math.PI / 2
+  wall2.position.set(4, 1.5, 0)
+  group.add(wall2)
+  
+  // Ceiling
+  const ceilingGeometry = new THREE.BoxGeometry(10, 0.5, 6)
+  const ceilingMaterial = new THREE.MeshStandardMaterial({ color: 0x3d4a5e })
+  const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial)
+  ceiling.position.y = 3
+  group.add(ceiling)
+  
+  // Placeholder sphere
+  const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16)
+  const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0x6b7280 })
+  const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
+  sphere.position.set(0, 1, -1)
+  group.add(sphere)
+  
+  return group
+}
+
+// ─── Format number ───
+function formatNumber(num: number): string {
+  if (num === 0) return '0'
+  const neg = num < 0 ? '-' : ''
+  const absNum = Math.abs(num)
+  if (absNum >= 1e6) return `${neg}${absNum / 1e6}M`
+  if (absNum >= 1e3) return `${neg}${absNum / 1e3}k`
+  return `${neg}${absNum}`
 }
 
 // ─── ORVYNE Frontend Component ───
@@ -106,81 +252,78 @@ export default function App() {
       .catch(() => toast('ORVYNE backend unavailable'))
   }, [])
 
-  // BATISSE state
+  // BATISSE state - track what type of scene we're showing
+  const [batisseSceneType, setBatisseSceneType] = useState<SceneType>(SceneType.PLACEHOLDER)
   const [batisseLoading, setBatisseLoading] = useState(false)
   const [batisseError, setBatisseError] = useState<string | null>(null)
   const [batisseModel, setBatisseModel] = useState<THREE.Group | null>(null)
+  const [batisseRooms, setBatisseRooms] = useState<any[]>([])
+  const [currentRoom, setCurrentRoom] = useState<string | null>(null)
 
-  // Load BATISSE model
+  // Load BATISSE model and room data
   useEffect(() => {
     setBatisseLoading(true)
+    
+    // Step 1: Get geometry data
     api('/api/batisse/projects/1/geometry', {})
       .then(data => {
-        // Check if we have geometry data ready for 3D
+        setBatisseRooms(data.rooms || [])
+        
+        // Determine scene type based on data availability
         if (data.ready_for_3d && data.geometry) {
-          // In a full implementation, we'd construct a GLB from the geometry
-          // For now, try to load a GLB from the backend's export endpoint
-          api('/api/batisse/projects/1/geometry/export-glb', {})
+          // Has geometry data - check for GLB export
+          return api('/api/batisse/projects/1/geometry/export-glb', {})
             .then(glbData => {
-              // glbData would contain the GLB binary blob
-              // For demonstration, we'll create a simple scene
-              setBatisseLoading(false)
+              if (glbData && glbData.success !== false) {
+                // Actual BATISSE GLB - mark scene type
+                setBatisseSceneType(SceneType.ACTUAL_BATISSE)
+                // Try to load the actual GLB
+                loadActualBatisseGLB(glbData.glb_base64 || '').then(loadedModel => {
+                  if (loadedModel) {
+                    setBatisseModel(loadedModel)
+                  } else {
+                    // GLB loaded but failed - fall back to geometry-derived
+                    setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                    setBatisseModel(createGeometryDerivedScene(batisseRooms))
+                  }
+                }).catch(() => {
+                  setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                  setBatisseModel(createGeometryDerivedScene(batisseRooms))
+                })
+              } else {
+                // Geometry-derived scene
+                setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                setBatisseModel(createGeometryDerivedScene(batisseRooms))
+              }
             })
             .catch(() => {
-              // Backend not reachable - show placeholder scene
-              setBatisseModel(createPlaceholderScene())
-              setBatisseLoading(false)
+              // GLB export failed - use geometry-derived
+              setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+              setBatisseModel(createGeometryDerivedScene(batisseRooms))
             })
-        } else {
-          // Geometry not ready for 3D yet
+        })
+        .catch(() => {
+          setBatisseError('BATISSE backend unavailable')
+          setBatisseSceneType(SceneType.PLACEHOLDER)
           setBatisseModel(createPlaceholderScene())
           setBatisseLoading(false)
-        }
+        })
       })
       .catch(() => {
         setBatisseError('BATISSE backend unavailable')
+        setBatisseSceneType(SceneType.PLACEHOLDER)
+        setBatisseModel(createPlaceholderScene())
         setBatisseLoading(false)
       })
   }, [])
 
-  // Create a placeholder scene when backend is unavailable
-  function createPlaceholderScene(): THREE.Group {
-    const group = new THREE.Group()
-    
-    // Floor
-    const floorGeometry = new THREE.PlaneGeometry(10, 10)
-    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
-    const floor = new THREE.Mesh(floorGeometry, floorMaterial)
-    floor.rotation.x = -Math.PI / 2
-    floor.position.y = -0.01
-    group.add(floor)
-    
-    // Walls (simple box)
-    const wallGeometry = new THREE.BoxGeometry(8, 3, 0.5)
-    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x3d4a5e })
-    const wall1 = new THREE.Mesh(wallGeometry, wallMaterial)
-    wall1.position.set(-4, 1.5, 0)
-    group.add(wall1)
-    const wall2 = new THREE.Mesh(wallGeometry, wallMaterial)
-    wall2.rotation.y = Math.PI / 2
-    wall2.position.set(4, 1.5, 0)
-    group.add(wall2)
-    
-    // Ceiling
-    const ceilingGeometry = new THREE.BoxGeometry(8, 0.5, 6)
-    const ceiling = new THREE.Mesh(ceilingGeometry, wallMaterial)
-    ceiling.position.y = 3
-    group.add(ceiling)
-    
-    // Add a simple sphere as a placeholder furniture
-    const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16)
-    const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xef476f })
-    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
-    sphere.position.set(0, 1, -1)
-    group.add(sphere)
-    
-    return group
-  }
+  // Room navigation effect
+  useEffect(() => {
+    // Update camera when room changes
+    if (currentRoom) {
+      // Could animate camera to room position
+    }
+  }, [currentRoom])
 
   // Helper: format number with appropriate units
   function formatNumber(num: number): string {
@@ -190,6 +333,14 @@ export default function App() {
     if (absNum >= 1e6) return `${neg}${absNum / 1e6}M`
     if (absNum >= 1e3) return `${neg}${absNum / 1e3}k`
     return `${neg}${absNum}`
+  }
+
+  // Room click handler
+  const handleRoomClick = (roomId: string) => {
+    setCurrentRoom(roomId)
+    api(`/api/navigation/set-room/user-123/${roomId}`, {
+      method: 'POST',
+    }).then(() => toast(`Moved to room ${roomId}`)).catch(() => toast('Navigation failed'))
   }
 
   return (
@@ -273,29 +424,53 @@ export default function App() {
                     })
                     .catch(() => toast('ORVYNE backend unavailable'))
                   
-                  // Load BATISSE model
+                  // Load BATISSE model and room data
                   setBatisseLoading(true)
                   api('/api/batisse/projects/1/geometry', {})
                     .then(data => {
-                      setBatisseLoading(false)
+                      setBatisseRooms(data.rooms || [])
+                      
+                      // Determine scene type
                       if (data.ready_for_3d && data.geometry) {
-                        // Try to export GLB
+                        // Has geometry data - check for GLB export
                         return api('/api/batisse/projects/1/geometry/export-glb', {})
-                      })
-                      .then(glbData => {
-                        // In a full implementation, we'd use the GLB binary data
-                        // For now, create a scene from the geometry data
-                        setBatisseModel(createSceneFromGeometry(data.geometry))
+                          .then(glbData => {
+                            if (glbData && glbData.success !== false) {
+                              // Actual BATISSE GLB - mark scene type and load GLB
+                              setBatisseSceneType(SceneType.ACTUAL_BATISSE)
+                              // Try to load the actual GLB
+                              loadActualBatisseGLB(glbData.glb_base64 || '').then(loadedModel => {
+                                if (loadedModel) {
+                                  setBatisseModel(loadedModel)
+                                } else {
+                                  // GLB loaded but failed - fall back to geometry-derived
+                                  setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                                  setBatisseModel(createGeometryDerivedScene(batisseRooms))
+                                }
+                              }).catch(() => {
+                                setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                                setBatisseModel(createGeometryDerivedScene(batisseRooms))
+                              })
+                          })
+                          .catch(() => {
+                            // GLB export failed - use geometry-derived
+                            setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                            setBatisseModel(createGeometryDerivedScene(batisseRooms))
+                          })
                       })
                       .catch(() => {
+                        setBatisseError('BATISSE backend unavailable')
+                        setBatisseSceneType(SceneType.PLACEHOLDER)
                         setBatisseModel(createPlaceholderScene())
+                        setBatisseLoading(false)
                       })
-                    })
-                    .catch(() => {
-                      setBatisseError('BATISSE backend unavailable')
-                      setBatisseLoading(false)
-                      setBatisseModel(createPlaceholderScene())
-                    })
+                  })
+                  .catch(() => {
+                    setBatisseError('BATISSE backend unavailable')
+                    setBatisseSceneType(SceneType.PLACEHOLDER)
+                    setBatisseModel(createPlaceholderScene())
+                    setBatisseLoading(false)
+                  })
                 }, [])
 
                 return (
@@ -324,6 +499,9 @@ export default function App() {
                       <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
                         Upload a floor plan and view your 3D dollhouse.
                       </p>
+                      <small style={{ color: '#94a3b8' }}>
+                        {formatNumber(batisseRooms.length)} rooms•{formatNumber(data?.area_sq_m || 0)} sqm{data?.units ? ` (${data.units})` : ''}
+                      </small>
                     </header>
                     
                     <div style={{ 
@@ -333,36 +511,88 @@ export default function App() {
                       minHeight: '300px',
                       background: 'rgba(10, 14, 23, 0.8)',
                       borderRadius: '8px',
-                      marginBottom: '1rem'
+                      marginBottom: '1rem',
+                      position: 'relative'
                     }}>
+                      {/* Room grid overlay with clickable areas */}
+                      {batisseRooms.length > 0 && (
+                        <div style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          pointerEvents: 'auto'
+                        }}>
+                          {batisseRooms.map((room, idx) => {
+                            const centerAngle = (idx / Math.max(batisseRooms.length, 1)) * Math.PI * 2
+                            const radius = 100
+                            const x = radius * Math.cos(centerAngle)
+                            const y = radius * Math.sin(centerAngle)
+                            
+                            return (
+                              <div
+                                key={room.room_id}
+                                style={{
+                                  position: 'absolute',
+                                  width: 100,
+                                  height: 100,
+                                  left: `${x - 50}px`,
+                                  top: `${y - 50}px`,
+                                  background: 'rgba(59, 130, 246, 0.3)',
+                                  border: '2px solid #3b82f6',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s'
+                                }}
+                                onClick={() => handleRoomClick(room.room_id)}
+                                title={`Room ${room.room_id}: ${room.room_name || 'Unnamed'}`}>
+                                <span style={{
+                                  position: 'absolute',
+                                  top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                                  fontSize: '10px', color: '#fff', textAlign: 'center'
+                                }}>{room.room_id?.substring(0, 6)}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                      
                       {batisseModel ? (
                         <div id="three-container" style={{ width: 400, height: 400 }} />
                       ) : (
                         <p style={{ textAlign: 'center', color: '#64748b', marginTop: '5rem' }}>
-                          Waiting for floor plan...
+                          {batisseSceneType === SceneType.ACTUAL_BATISSE
+                            ? 'Loading actual BATISSE 3D home...'
+                            : batisseSceneType === SceneType.GEOMETRY_DERIVED
+                              ? 'Deriving home from floor plan geometry...'
+                              : 'Waiting for floor plan...'}
                         </p>
                       )}
-                    </div>
-                    
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      
                       {batisseError ? (
-                        <p style={{ color: '#f87171', marginBottom: '1rem' }}>{batisseError}</p>
+                        <p style={{ color: '#f87171', marginBottom: '1rem', textAlign: 'center' }}>{batisseError}</p>
                       ) : null}
                       
-                      <div>
-                        <button
-                          onClick={() => {
-                            setBatisseLoading(true)
-                            api('/api/batisse/upload', {
-                              method: 'POST',
-                              body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
-                            }).then(() => {
-                              setBatisseLoading(false)
-                              toast('Floor plan uploaded successfully')
-                            }).catch(() => {
-                              setBatisseLoading(false)
-                              toast('BATISSE upload failed')
-                            })
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        {batisseError ? (
+                          <p style={{ color: '#f87171', marginBottom: '1rem' }}>{batisseError}</p>
+                        ) : null}
+                        
+                        <div>
+                          <button
+                            onClick={() => {
+                              setBatisseLoading(true)
+                              api('/api/batisse/upload', {
+                                method: 'POST',
+                                body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
+                              }).then(() => {
+                                setBatisseLoading(false)
+                                toast('Floor plan uploaded successfully')
+                              }).catch(() => {
+                                setBatisseLoading(false)
+                                toast('BATISSE upload failed')
+                              })
                           }}
                           disabled={batisseLoading}
                           style={{
@@ -381,6 +611,7 @@ export default function App() {
                           <small style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
                             (requires BATISSE backend)
                           </small>
+                        </div>
                         <br />
                         <small style={{ color: '#94a3b8' }}>
                           {formatNumber(data?.room_count || 0)} rooms•{formatNumber(data?.area_sq_m || 0)} sqm{data?.units ? ` (${data.units})` : ''}
@@ -627,71 +858,4 @@ export default function App() {
       </div>
     </BrowserRouter>
   )
-}
-
-// Initialize Three.js scene on mount
-useEffect(() => {
-  const script = document.createElement('script')
-  script.src = 'https://cdn.tailwindcss.com'
-  document.head.appendChild(script)
-}, [])
-
-// Placeholder scene creator
-function createPlaceholderScene(): THREE.Group {
-  const group = new THREE.Group()
-  
-  // Floor
-  const floorGeometry = new THREE.PlaneGeometry(10, 10)
-  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
-  const floor = new THREE.Mesh(floorGeometry, floorMaterial)
-  floor.rotation.x = -Math.PI / 2
-  floor.position.y = -0.01
-  group.add(floor)
-  
-  // Walls
-  const wallGeometry = new THREE.BoxGeometry(8, 3, 0.5)
-  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x3d4a5e })
-  const wall1 = new THREE.Mesh(wallGeometry, wallMaterial)
-  wall1.position.set(-4, 1.5, 0)
-  group.add(wall1)
-  const wall2 = new THREE.Mesh(wallGeometry, wallMaterial)
-  wall2.rotation.y = Math.PI / 2
-  wall2.position.set(4, 1.5, 0)
-  group.add(wall2)
-  
-  // Ceiling
-  const ceilingGeometry = new THREE.BoxGeometry(8, 0.5, 6)
-  const ceiling = new THREE.Mesh(ceilingGeometry, wallMaterial)
-  ceiling.position.y = 3
-  group.add(ceiling)
-  
-  // Placeholder furniture
-  const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16)
-  const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xef476f })
-  const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
-  sphere.position.set(0, 1, -1)
-  group.add(sphere)
-  
-  return group
-}
-
-function createSceneFromGeometry(geometry: any): THREE.Group {
-  const group = new THREE.Group()
-  
-  // Simple floor
-  const floorGeometry = new THREE.PlaneGeometry(10, 10)
-  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
-  const floor = new THREE.Mesh(floorGeometry, floorMaterial)
-  floor.rotation.x = -Math.PI / 2
-  floor.position.y = -0.01
-  group.add(floor)
-  
-  // Add a placeholder furniture item
-  const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16)
-  const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xef476f })
-  const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
-  sphere.position.set(0, 1, -1)
-  group.add(sphere)
-  
-  return group
 }

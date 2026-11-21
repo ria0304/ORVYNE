@@ -45,9 +45,6 @@ GEMS = {
     "ruby": {"color": (224, 36, 36), "roughness": 0.15, "ior": 1.70},
     "sapphire": {"color": (32, 80, 224), "roughness": 0.15, "ior": 1.76},
     "emerald": {"color": (34, 139, 34), "roughness": 0.25, "ior": 1.57},
-    "emerald": {"color": (34, 139, 34), "roughness": 0.25, "ior": 1.57},
-    "sapphire": {"color": (32, 80, 224), "roughness": 0.15, "ior": 1.76},
-    "emerald": {"color": (34, 139, 34), "roughness": 0.25, "ior": 1.57},
     "pearl": {"color": (255, 255, 230), "roughness": 0.8, "structural": True},
     "moissanite": {"color": (224, 236, 250), "roughness": 0.1, "ior": 2.65},
 }
@@ -63,19 +60,108 @@ def gem_spec(req: Dict[str, Any]) -> dict:
     return GEMS.get(gn, GEMS["diamond"])
 
 
-# ── 3D mesh generation ─────────────────────────────────────────────────
+class VelarisService:
+    """Adapter for VELARIS project services."""
+
+    def __init__(self, base_url: str | None = None):
+        self.base_url = base_url or VELARIS_BASE
+        self.client = None
+
+    async def __aenter__(self):
+        import httpx
+        self.client = httpx.AsyncClient(timeout=60.0)
+        return self
+
+    async def __aexit__(self, *args):
+        if self.client:
+            await self.client.aclose()
+
+    # ── Health ───────────────────────────────────────────────────────────
+
+    async def ping(self) -> bool:
+        """Check if VELARIS backend is reachable."""
+        try:
+            if self.client is None:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    await client.get(f"{self.base_url}/api/health")
+            return True
+        except Exception:
+            return False
+
+    # ── Design generation ─────────────────────────────────────────────────
+
+    async def generate_design(self, req: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate a jewellery design via VELARIS AI."""
+        if self.client is None:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(f"{self.base_url}/api/generate-design", json=req)
+                response.raise_for_status()
+                return response.json()
+        else:
+            response = await self.client.post(f"{self.base_url}/api/generate-design", json=req)
+            response.raise_for_status()
+            return response.json()
+
+    # ── Jewellery advisor ─────────────────────────────────────────────────
+
+    async def jewellery_advisor(self, req: Dict[str, Any]) -> Dict[str, Any]:
+        """Get gemstone recommendations and gifting advice from VELARIS."""
+        if self.client is None:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(f"{self.base_url}/api/jewellery-advisor", json=req)
+                response.raise_for_status()
+                return response.json()
+        else:
+            response = await self.client.post(f"{self.base_url}/api/jewellery-advisor", json=req)
+            response.raise_for_status()
+            return response.json()
+
+    # ── Design listing ────────────────────────────────────────────────────
+
+    async def list_designs(self) -> Dict[str, Any]:
+        """List available jewellery designs from VELARIS backend."""
+        if self.client is None:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(f"{self.base_url}/api/trends")
+                response.raise_for_status()
+                return response.json()
+        else:
+            response = await self.client.get(f"{self.base_url}/api/trends")
+            response.raise_for_status()
+            return response.json()
+
+    # ── Design classification ─────────────────────────────────────────────
+
+    async def classify_type(self, req: Dict[str, Any]) -> Dict[str, Any]:
+        """Classify a design type from sketch/photo via VELARIS."""
+        if self.client is None:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(f"{self.base_url}/api/classify-type", json=req)
+                response.raise_for_status()
+                return response.json()
+        else:
+            response = await self.client.post(f"{self.base_url}/api/classify-type", json=req)
+            response.raise_for_status()
+            return response.json()
+
+    # ── Similar designs ───────────────────────────────────────────────────
+
+    async def find_similar(self, req: Dict[str, Any]) -> Dict[str, Any]:
+        """Find similar jewellery designs via VELARIS."""
+        if self.client is None:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(f"{self.base_url}/api/similar", json=req)
+                response.raise_for_status()
+                return response.json()
+        else:
+            response = await self.client.post(f"{self.base_url}/api/similar", json=req)
+            response.raise_for_status()
+            return response.json()
+
+    # ── 3D mesh generation ────────────────────────────────────────────────
 
     async def generate_3d_mesh(self, design_req: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate a 3D jewellery mesh via VELARIS rendering pipeline.
-
-        Uses trimesh + PBR-inspired material parameters derived from the
-        design request (metal type, gemstone, carat, style) to produce a
-        watertight triangle mesh exported as a GLTF data URI.
-
-        This is a synthetic mesh generation — it does not call an external
-        3D service. It leverages the same geometric logic as the existing
-        VELARIS render_realistic() pipeline, now in 3D.
-        """
+        """Generate a 3D jewellery mesh via VELARIS rendering pipeline."""
         # First, generate the 2D design via the existing endpoint to get specs
         try:
             design = await self.generate_design(design_req)
@@ -132,7 +218,6 @@ def gem_spec(req: Dict[str, Any]) -> dict:
         gem_roughness: float,
     ) -> trimesh.Trimesh:
         """Build a parametric 3D jewellery mesh using trimesh."""
-
         size_scale = max(0.1, min(5.0, carat ** (1 / 3)))
 
         if jewelry_type == "ring":

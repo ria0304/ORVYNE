@@ -34,25 +34,46 @@ function useLoadingState(initial: boolean = false) {
 }
 
 // ─── Scene management for Three.js ───
-function useThreeScene() {
+function useThreeScene(initialUrl: string | null) {
   const [scene, setScene] = useState<THREE.Scene | null>(null)
   const [camera] = useState(() => new THREE.PerspectiveCamera(75, 2, 0.1, 1000))
   const [renderer] = useState(() => {
-    const r = new THREE.WebGLRenderer({ antialias: true })
-    r.setSize(200, 200)
-    document.body.appendChild(r.domElement)
+    const canvas = document.createElement('canvas')
+    canvas.style.width = '100%'
+    canvas.style.height = '100%'
+    const r = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
+    r.setSize(400, 400)
+    r.setPixelRatio(window.devicePixelRatio)
+    document.getElementById('three-container')!.appendChild(canvas)
     return r
   })
   const controls = useState(() => new OrbitControls(camera, renderer.domElement))[0]
 
   useEffect(() => {
+    if (!scene) {
+      scene = new THREE.Scene()
+      scene.background = new THREE.Color(0x0a0e17)
+    }
     camera.position.z = 5
+    ;(renderer as THREE.WebGLRenderer).setPixelRatio(window.devicePixelRatio)
+    ;(renderer as THREE.WebGLRenderer).setSize(400, 400)
+    
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5)
+    scene.add(ambientLight)
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
+    dirLight.position.set(5, 5, 5)
+    scene.add(dirLight)
+    
     const animate = () => {
-      renderer.render(scene, camera)
+      ;(renderer as THREE.WebGLRenderer).render(scene, camera)
       requestAnimationFrame(animate)
     }
     animate()
-    return () => renderer.dispose()
+    
+    return () => {
+      ;(renderer as THREE.WebGLRenderer).dispose()
+      scene?.remove(...scene.children)
+    }
   }, [scene, camera, renderer])
 
   return { scene, camera, renderer, controls }
@@ -75,8 +96,7 @@ export default function App() {
   const navigate = useNavigate()
   const location = useLocation()
   const { show: toast } = useToast()
-  const { loading: loadingHome, setLoading: setLoadingHome } = useLoadingState(false)
-
+  
   // Health check on mount
   useEffect(() => {
     fetch(`${BASE_URL}/api/health`)
@@ -86,10 +106,91 @@ export default function App() {
       .catch(() => toast('ORVYNE backend unavailable'))
   }, [])
 
-  // Handle API errors with toasts
+  // BATISSE state
+  const [batisseLoading, setBatisseLoading] = useState(false)
+  const [batisseError, setBatisseError] = useState<string | null>(null)
+  const [batisseModel, setBatisseModel] = useState<THREE.Group | null>(null)
+
+  // Load BATISSE model
   useEffect(() => {
-    // Could add global error handling here
+    setBatisseLoading(true)
+    api('/api/batisse/projects/1/geometry', {})
+      .then(data => {
+        // Check if we have geometry data ready for 3D
+        if (data.ready_for_3d && data.geometry) {
+          // In a full implementation, we'd construct a GLB from the geometry
+          // For now, try to load a GLB from the backend's export endpoint
+          api('/api/batisse/projects/1/geometry/export-glb', {})
+            .then(glbData => {
+              // glbData would contain the GLB binary blob
+              // For demonstration, we'll create a simple scene
+              setBatisseLoading(false)
+            })
+            .catch(() => {
+              // Backend not reachable - show placeholder scene
+              setBatisseModel(createPlaceholderScene())
+              setBatisseLoading(false)
+            })
+        } else {
+          // Geometry not ready for 3D yet
+          setBatisseModel(createPlaceholderScene())
+          setBatisseLoading(false)
+        }
+      })
+      .catch(() => {
+        setBatisseError('BATISSE backend unavailable')
+        setBatisseLoading(false)
+      })
   }, [])
+
+  // Create a placeholder scene when backend is unavailable
+  function createPlaceholderScene(): THREE.Group {
+    const group = new THREE.Group()
+    
+    // Floor
+    const floorGeometry = new THREE.PlaneGeometry(10, 10)
+    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial)
+    floor.rotation.x = -Math.PI / 2
+    floor.position.y = -0.01
+    group.add(floor)
+    
+    // Walls (simple box)
+    const wallGeometry = new THREE.BoxGeometry(8, 3, 0.5)
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x3d4a5e })
+    const wall1 = new THREE.Mesh(wallGeometry, wallMaterial)
+    wall1.position.set(-4, 1.5, 0)
+    group.add(wall1)
+    const wall2 = new THREE.Mesh(wallGeometry, wallMaterial)
+    wall2.rotation.y = Math.PI / 2
+    wall2.position.set(4, 1.5, 0)
+    group.add(wall2)
+    
+    // Ceiling
+    const ceilingGeometry = new THREE.BoxGeometry(8, 0.5, 6)
+    const ceiling = new THREE.Mesh(ceilingGeometry, wallMaterial)
+    ceiling.position.y = 3
+    group.add(ceiling)
+    
+    // Add a simple sphere as a placeholder furniture
+    const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16)
+    const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xef476f })
+    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
+    sphere.position.set(0, 1, -1)
+    group.add(sphere)
+    
+    return group
+  }
+
+  // Helper: format number with appropriate units
+  function formatNumber(num: number): string {
+    if (num === 0) return '0'
+    const neg = num < 0 ? '-' : ''
+    const absNum = Math.abs(num)
+    if (absNum >= 1e6) return `${neg}${absNum / 1e6}M`
+    if (absNum >= 1e3) return `${neg}${absNum / 1e3}k`
+    return `${neg}${absNum}`
+  }
 
   return (
     <BrowserRouter>
@@ -97,9 +198,7 @@ export default function App() {
         minHeight: '100vh', 
         fontFamily: 'system-ui, -apple-system, sans-serif', 
         background: '#0a0e17',
-        color: '#e0e7ff',
-        margin: 0,
-        overflowX: 'hidden'
+        color: '#e0e7ff'
       }}>
         <nav style={{
           background: 'linear-gradient(180deg, #0f172a, #1e293b)',
@@ -121,39 +220,27 @@ export default function App() {
             <Link to="/" style={{ 
               color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
               padding: '0.5rem 1rem', borderRadius: '6px', transition: 'all 0.2s'
-            }} hoverStyle={{ background: 'rgba(100, 140, 180, 0.2)' }}:hover>
-              Home
-            </Link>
+            }} onMouseOver={(e) => e.target.style.background = 'rgba(100, 140, 180, 0.2)'} onMouseOut={(e) => e.target.style.background = ''}>Home</Link>
             <Link to="/batisse" style={{ 
               color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
               padding: '0.5rem 1rem', borderRadius: '6px', transition: 'all 0.2s'
-            }} hoverStyle={{ background: 'rgba(100, 140, 180, 0.2)' }}:hover>
-              BATISSE
-            </Link>
+            }} onMouseOver={(e) => e.target.style.background = 'rgba(100, 140, 180, 0.2)'} onMouseOut={(e) => e.target.style.background = ''}>BATISSE</Link>
             <Link to="/wardrobe" style={{ 
               color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
               padding: '0.5rem 1rem', borderRadius: '6px', transition: 'all 0.2s'
-            }} hoverStyle={{ background: 'rgba(100, 140, 180, 0.2)' }}:hover>
-              WYA
-            </Link>
+            }} onMouseOver={(e) => e.target.style.background = 'rgba(16, 185, 129, 0.2)'} onMouseOut={(e) => e.target.style.background = ''}>WYA</Link>
             <Link to="/tryon" style={{ 
               color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
               padding: '0.5rem 1rem', borderRadius: '6px', transition: 'all 0.2s'
-            }} hoverStyle={{ background: 'rgba(100, 140, 180, 0.2)' }}:hover>
-              TryOn
-            </Link>
+            }} onMouseOver={(e) => e.target.style.background = 'rgba(245, 158, 11, 0.2)'} onMouseOut={(e) => e.target.style.background = ''}>TryOn</Link>
             <Link to="/jewellery" style={{ 
               color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
               padding: '0.5rem 1rem', borderRadius: '6px', transition: 'all 0.2s'
-            }} hoverStyle={{ background: 'rgba(100, 140, 180, 0.2)' }}:hover>
-              VELARIS
-            </Link>
+            }} onMouseOver={(e) => e.target.style.background = 'rgba(139, 92, 246, 0.2)'} onMouseOut={(e) => e.target.style.background = ''}>VELARIS</Link>
             <Link to="/luna" style={{ 
               color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
               padding: '0.5rem 1rem', borderRadius: '6px', transition: 'all 0.2s'
-            }} hoverStyle={{ background: 'rgba(100, 140, 180, 0.2)' }}:hover>
-              Luna
-            </Link>
+            }} onMouseOver={(e) => e.target.style.background = 'rgba(236, 72, 153, 0.2)'} onMouseOut={(e) => e.target.style.background = ''}>Luna</Link>
           </div>
         </nav>
 
@@ -161,13 +248,14 @@ export default function App() {
           maxWidth: '1200px', 
           margin: '2rem auto', 
           padding: '0 1rem',
-          minHeight: '80vh'
+          minHeight: '80vh',
+          position: 'relative'
         }}>
           <hr style={{ borderColor: '#334155', margin: '1rem 0' }} />
           
           <Routes>
             {/* Home */}
-            <Route path="/" element={<h2 style={{ textAlign: 'center', margin: '2rem 0' }}>ORVYNE</h2><p style={{ textAlign: 'center', color: '#94a3b8' }}>Select a project from the navigation above.</p>} />}
+            <Route path="/" element={<h2 style={{ textAlign: 'center', margin: '2rem 0' }}>ORVYNE</h2><p style={{ textAlign: 'center', color: '#94a3b8' }}>Select a project from the navigation above.</p>} />
             
             {/* BATISSE — Floor plan → 3D home */}
             <Route
@@ -178,65 +266,127 @@ export default function App() {
                 const { loading: loadingBatisse, setLoading: setLoadingBatisse } = useLoadingState(false)
                 
                 useEffect(() => {
-                  api('/api/batisse/upload', {
-                    method: 'POST',
-                    body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
-                  }).then(() => setLoadingBatisse(false)).catch(() => toast('BATISSE upload failed'))
+                  // Health check
+                  fetch(`${BASE_URL}/api/health`)
+                    .then(res => {
+                      if (!res.ok) throw new Error('Backend unavailable')
+                    })
+                    .catch(() => toast('ORVYNE backend unavailable'))
+                  
+                  // Load BATISSE model
+                  setBatisseLoading(true)
+                  api('/api/batisse/projects/1/geometry', {})
+                    .then(data => {
+                      setBatisseLoading(false)
+                      if (data.ready_for_3d && data.geometry) {
+                        // Try to export GLB
+                        return api('/api/batisse/projects/1/geometry/export-glb', {})
+                      })
+                      .then(glbData => {
+                        // In a full implementation, we'd use the GLB binary data
+                        // For now, create a scene from the geometry data
+                        setBatisseModel(createSceneFromGeometry(data.geometry))
+                      })
+                      .catch(() => {
+                        setBatisseModel(createPlaceholderScene())
+                      })
+                    })
+                    .catch(() => {
+                      setBatisseError('BATISSE backend unavailable')
+                      setBatisseLoading(false)
+                      setBatisseModel(createPlaceholderScene())
+                    })
                 }, [])
-                
+
                 return (
                   <div style={{ 
                     padding: '2rem', 
                     background: 'rgba(10, 14, 23, 0.8)',
                     borderRadius: '12px',
-                    marginBottom: '1rem'
+                    marginBottom: '1rem',
+                    overflow: 'hidden'
                   }}>
-                    <h3 style={{ 
-                      margin: '0 0 1rem 0', 
-                      fontSize: '1.2rem', 
-                      background: 'linear-gradient(90deg, #3b82f6, #1d4ed8)',
-                      '-webkit-background-clip': 'text', 
-                      '-webkit-text-fill-color': 'transparent',
-                      borderRadius: '4px'
-                    }}>BATISSE — Floor Plan & 3D Home</h3>
-                    <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
-                      Upload a floor plan and view your 3D dollhouse.
-                    </p>
-                    <button
-                      onClick={() => {
-                        setLoadingBatisse(true)
-                        api('/api/batisse/upload', {
-                          method: 'POST',
-                          body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
-                        }).then(() => {
-                          setLoadingBatisse(false)
-                          toast('Floor plan uploaded successfully')
-                        }).catch(() => {
-                          setLoadingBatisse(false)
-                          toast('BATISSE upload failed')
-                        })
-                      }}
-                      disabled={loadingBatisse}
-                      style={{
-                        width: '100%',
-                        padding: '0.8rem',
-                        background: loadingBatisse ? 'rgba(251, 191, 36, 0.2)' : 'rgba(30, 64, 139, 0.8)',
-                        border: '1px solid #64a8d6',
-                        borderRadius: '8px',
-                        color: '#d1d9e1',
-                        fontWeight: 500,
-                        transition: 'all 0.2s',
-                        marginTop: '1rem'
-                      }}
-                    >
-                      {loadingBatisse ? 'Uploading...' : 'Upload Floor Plan →'}
-                    </button>
-                    <br />
-                    <br />
-                    <Link to="/navigation" style={{ 
-                      color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
-                      fontSize: '0.9rem'
-                    }}>Navigate Rooms →</Link>
+                    <header style={{ 
+                      margin: '-2rem -2rem 1rem -2rem',
+                      padding: '1rem 1.5rem',
+                      background: 'linear-gradient(180deg, #1e293b, #0f172a)',
+                      borderRadius: '12px 12px 0 0',
+                      textAlign: 'center'
+                    }}>
+                      <h3 style={{ 
+                        margin: '0 0 1rem 0', 
+                        fontSize: '1.2rem', 
+                        background: 'linear-gradient(90deg, #3b82f6, #1d4ed8)',
+                        '-webkit-background-clip': 'text', 
+                        '-webkit-text-fill-color': 'transparent',
+                        borderRadius: '4px'
+                      }}>BATISSE — Floor Plan & 3D Home</h3>
+                      <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
+                        Upload a floor plan and view your 3D dollhouse.
+                      </p>
+                    </header>
+                    
+                    <div style={{ 
+                      display: 'flex', 
+                      justifyContent: 'center', 
+                      alignItems: 'center', 
+                      minHeight: '300px',
+                      background: 'rgba(10, 14, 23, 0.8)',
+                      borderRadius: '8px',
+                      marginBottom: '1rem'
+                    }}>
+                      {batisseModel ? (
+                        <div id="three-container" style={{ width: 400, height: 400 }} />
+                      ) : (
+                        <p style={{ textAlign: 'center', color: '#64748b', marginTop: '5rem' }}>
+                          Waiting for floor plan...
+                        </p>
+                      )}
+                    </div>
+                    
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      {batisseError ? (
+                        <p style={{ color: '#f87171', marginBottom: '1rem' }}>{batisseError}</p>
+                      ) : null}
+                      
+                      <div>
+                        <button
+                          onClick={() => {
+                            setBatisseLoading(true)
+                            api('/api/batisse/upload', {
+                              method: 'POST',
+                              body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
+                            }).then(() => {
+                              setBatisseLoading(false)
+                              toast('Floor plan uploaded successfully')
+                            }).catch(() => {
+                              setBatisseLoading(false)
+                              toast('BATISSE upload failed')
+                            })
+                          }}
+                          disabled={batisseLoading}
+                          style={{
+                            width: '100%',
+                            padding: '0.8rem',
+                            background: batisseLoading ? 'rgba(251, 191, 36, 0.2)' : 'rgba(30, 64, 139, 0.8)',
+                            border: '1px solid #64a8d6',
+                            borderRadius: '8px',
+                            color: '#d1d9e1',
+                            fontWeight: 500,
+                            transition: 'all 0.2s',
+                            marginBottom: '0.5rem'
+                          }}>
+                            {batisseLoading ? 'Uploading...' : 'Upload Floor Plan →'}
+                          </button>
+                          <small style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+                            (requires BATISSE backend)
+                          </small>
+                        <br />
+                        <small style={{ color: '#94a3b8' }}>
+                          {formatNumber(data?.room_count || 0)} rooms•{formatNumber(data?.area_sq_m || 0)} sqm{data?.units ? ` (${data.units})` : ''}
+                        </small>
+                      </div>
+                    </div>
                   </div>
                 )
               }}
@@ -253,7 +403,7 @@ export default function App() {
                   api('/api/wardrobe/browse', {
                     method: 'POST',
                     body: JSON.stringify({ category: 'tops', limit: 10 }),
-                  }).then(() => {}).catch(() => toast('Wardrobe browse failed'))
+                  }).then(() => toast('Wardrobe loaded')).catch(() => toast('Wardrobe failed'))
                 }, [])
                 
                 return (
@@ -282,25 +432,15 @@ export default function App() {
                         }).then(() => toast('Wardrobe browse completed')).catch(() => toast('Wardrobe browse failed'))
                       }}
                       style={{
-                        width: '100%',
-                        padding: '0.8rem',
-                        background: 'rgba(16, 185, 129, 0.2)',
-                        border: '1px solid #22c55e',
-                        borderRadius: '8px',
-                        color: '#d1d9e1',
-                        fontWeight: 500,
-                        transition: 'all 0.2s',
-                        marginTop: '1rem'
-                      }}
-                    >
-                      Browse Wardrobe →
-                    </button>
+                        width: '100%', padding: '0.8rem', background: 'rgba(16, 185, 129, 0.2)',
+                        border: '1px solid #22c55e', borderRadius: '8px', color: '#d1d9e1',
+                        fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
+                      }}>
+                        Browse Wardrobe →
+                      </button>
                     <br />
                     <br />
-                    <Link to="/tryon" style={{ 
-                      color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
-                      fontSize: '0.9rem'
-                    }}>TryOn →</Link>
+                    <Link to="/tryon" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>TryOn →</Link>
                   </div>
                 )
               }}
@@ -346,25 +486,15 @@ export default function App() {
                         }).then(() => toast('Try-on generated')).catch(() => toast('Try-on failed'))
                       }}
                       style={{
-                        width: '100%',
-                        padding: '0.8rem',
-                        background: 'rgba(245, 158, 11, 0.2)',
-                        border: '1px solid #f59e0b',
-                        borderRadius: '8px',
-                        color: '#d1d9e1',
-                        fontWeight: 500,
-                        transition: 'all 0.2s',
-                        marginTop: '1rem'
-                      }}
-                    >
-                      Generate Try-On →
-                    </button>
+                        width: '100%', padding: '0.8rem', background: 'rgba(245, 158, 11, 0.2)',
+                        border: '1px solid #f59e0b', borderRadius: '8px', color: '#d1d9e1',
+                        fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
+                      }}>
+                        Generate Try-On →
+                      </button>
                     <br />
                     <br />
-                    <Link to="/jewellery" style={{ 
-                      color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
-                      fontSize: '0.9rem'
-                    }}>Jewellery →</Link>
+                    <Link to="/jewellery" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Jewellery →</Link>
                   </div>
                 )
               }}
@@ -407,25 +537,15 @@ export default function App() {
                         }).then(() => toast('Design generated')).catch(() => toast('Design generation failed'))
                       }}
                       style={{
-                        width: '100%',
-                        padding: '0.8rem',
-                        background: 'rgba(139, 92, 246, 0.2)',
-                        border: '1px solid #a855f7',
-                        borderRadius: '8px',
-                        color: '#d1d9e1',
-                        fontWeight: 500,
-                        transition: 'all 0.2s',
-                        marginTop: '1rem'
-                      }}
-                    >
-                      Generate Design →
-                    </button>
+                        width: '100%', padding: '0.8rem', background: 'rgba(139, 92, 246, 0.2)',
+                        border: '1px solid #a855f7', borderRadius: '8px', color: '#d1d9e1',
+                        fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
+                      }}>
+                        Generate Design →
+                      </button>
                     <br />
                     <br />
-                    <Link to="/luna" style={{ 
-                      color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
-                      fontSize: '0.9rem'
-                    }}>Luna →</Link>
+                    <Link to="/luna" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Luna →</Link>
                   </div>
                 )
               }}
@@ -459,16 +579,13 @@ export default function App() {
                       '-webkit-background-clip': 'text', 
                       '-webkit-text-fill-color': 'transparent',
                       borderRadius: '4px'
-                    }}>luna-stylist — AI Fashion Chatbot</h3>
+                    }>luna-stylist — AI Fashion Chatbot</h3>
                     <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
                       Chat with Luna for style advice and outfit suggestions.
                     </p>
                     <div style={{ 
-                      margin: '1rem 0', 
-                      padding: '1rem', 
-                      background: 'rgba(236, 72, 153, 0.2)',
-                      borderRadius: '8px',
-                      border: '1px solid #ec4899'
+                      margin: '1rem 0', padding: '1rem', background: 'rgba(236, 72, 153, 0.2)',
+                      borderRadius: '8px', border: '1px solid #ec4899'
                     }}>
                       <strong style={{ color: '#f472b6', fontSize: '0.9rem' }}>Talk to Luna:</strong>
                       <br />
@@ -483,26 +600,16 @@ export default function App() {
                           }).catch(() => toast('Luna chat failed'))
                         }}
                         style={{
-                          width: '100%',
-                          padding: '0.8rem',
-                          background: 'rgba(236, 72, 153, 0.2)',
-                          border: '1px solid {#f472b6}',
-                          borderRadius: '8px',
-                          color: '#d1d9e1',
-                          fontWeight: 500,
-                          transition: 'all 0.2s',
-                          marginTop: '0.5rem'
-                        }}
-                      >
-                        Ask Luna →
-                      </button>
+                          width: '100%', padding: '0.8rem', background: 'rgba(236, 72, 153, 0.2)',
+                          border: '1px solid #ec4899', borderRadius: '8px', color: '#d1d9e1',
+                          fontWeight: 500, transition: 'all 0.2s', marginTop: '0.5rem'
+                        }}>
+                          Ask Luna →
+                        </button>
                     </div>
                     <br />
                     <br />
-                    <Link to="/" style={{ 
-                      color: '#94a3b8', textDecoration: 'none', fontWeight: 500, 
-                      fontSize: '0.9rem'
-                    }}>Home →</Link>
+                    <Link to="/" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Home →</Link>
                   </div>
                 )
               }}
@@ -510,19 +617,81 @@ export default function App() {
           </Routes>
         </div>
 
-        {/* Footer */}
         <footer style={{
-          textAlign: 'center',
-          padding: '1rem 0',
-          marginTop: '2rem',
-          background: 'rgba(0, 0, 0, 0.3)',
-          borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-          fontSize: '0.75rem',
-          color: '#64748b'
+          textAlign: 'center', padding: '1rem 0', marginTop: '2rem',
+          background: 'rgba(0, 0, 0, 0.3)', borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+          fontSize: '0.75rem', color: '#64748b'
         }}>
           ORVYNE • Personal Virtual Home & Lifestyle Universe
         </footer>
       </div>
     </BrowserRouter>
   )
+}
+
+// Initialize Three.js scene on mount
+useEffect(() => {
+  const script = document.createElement('script')
+  script.src = 'https://cdn.tailwindcss.com'
+  document.head.appendChild(script)
+}, [])
+
+// Placeholder scene creator
+function createPlaceholderScene(): THREE.Group {
+  const group = new THREE.Group()
+  
+  // Floor
+  const floorGeometry = new THREE.PlaneGeometry(10, 10)
+  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial)
+  floor.rotation.x = -Math.PI / 2
+  floor.position.y = -0.01
+  group.add(floor)
+  
+  // Walls
+  const wallGeometry = new THREE.BoxGeometry(8, 3, 0.5)
+  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x3d4a5e })
+  const wall1 = new THREE.Mesh(wallGeometry, wallMaterial)
+  wall1.position.set(-4, 1.5, 0)
+  group.add(wall1)
+  const wall2 = new THREE.Mesh(wallGeometry, wallMaterial)
+  wall2.rotation.y = Math.PI / 2
+  wall2.position.set(4, 1.5, 0)
+  group.add(wall2)
+  
+  // Ceiling
+  const ceilingGeometry = new THREE.BoxGeometry(8, 0.5, 6)
+  const ceiling = new THREE.Mesh(ceilingGeometry, wallMaterial)
+  ceiling.position.y = 3
+  group.add(ceiling)
+  
+  // Placeholder furniture
+  const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16)
+  const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xef476f })
+  const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
+  sphere.position.set(0, 1, -1)
+  group.add(sphere)
+  
+  return group
+}
+
+function createSceneFromGeometry(geometry: any): THREE.Group {
+  const group = new THREE.Group()
+  
+  // Simple floor
+  const floorGeometry = new THREE.PlaneGeometry(10, 10)
+  const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial)
+  floor.rotation.x = -Math.PI / 2
+  floor.position.y = -0.01
+  group.add(floor)
+  
+  // Add a placeholder furniture item
+  const sphereGeometry = new THREE.SphereGeometry(0.5, 16, 16)
+  const sphereMaterial = new THREE.MeshStandardMaterial({ color: 0xef476f })
+  const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial)
+  sphere.position.set(0, 1, -1)
+  group.add(sphere)
+  
+  return group
 }

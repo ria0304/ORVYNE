@@ -68,7 +68,6 @@ class VelarisService:
         self.client = None
 
     async def __aenter__(self):
-        import httpx
         self.client = httpx.AsyncClient(timeout=60.0)
         return self
 
@@ -92,6 +91,7 @@ class VelarisService:
 
     async def generate_design(self, req: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a jewellery design via VELARIS AI."""
+        import httpx
         if self.client is None:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(f"{self.base_url}/api/generate-design", json=req)
@@ -106,6 +106,7 @@ class VelarisService:
 
     async def jewellery_advisor(self, req: Dict[str, Any]) -> Dict[str, Any]:
         """Get gemstone recommendations and gifting advice from VELARIS."""
+        import httpx
         if self.client is None:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(f"{self.base_url}/api/jewellery-advisor", json=req)
@@ -120,6 +121,7 @@ class VelarisService:
 
     async def list_designs(self) -> Dict[str, Any]:
         """List available jewellery designs from VELARIS backend."""
+        import httpx
         if self.client is None:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.get(f"{self.base_url}/api/trends")
@@ -134,6 +136,7 @@ class VelarisService:
 
     async def classify_type(self, req: Dict[str, Any]) -> Dict[str, Any]:
         """Classify a design type from sketch/photo via VELARIS."""
+        import httpx
         if self.client is None:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(f"{self.base_url}/api/classify-type", json=req)
@@ -148,6 +151,7 @@ class VelarisService:
 
     async def find_similar(self, req: Dict[str, Any]) -> Dict[str, Any]:
         """Find similar jewellery designs via VELARIS."""
+        import httpx
         if self.client is None:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(f"{self.base_url}/api/similar", json=req)

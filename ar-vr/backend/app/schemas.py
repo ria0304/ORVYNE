@@ -121,4 +121,4 @@ class RoomAssignment(BaseModel):
     room_id: str
     room_name: str
     assigned_function: RoomFunction
-    updated_at: str  # ISO timestamp
+    updated_at: Optional[str] = None  # ISO timestamp

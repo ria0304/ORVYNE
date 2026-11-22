@@ -293,6 +293,9 @@ function BatissePage({ toast }: { toast: Notify }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [currentRoom, setCurrentRoom] = useState<string | null>(null)
+  const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'error'>('none')
+  const [homeGeometry, setHomeGeometry] = useState<any | null>(null)
+  const [spawnPoint, setSpawnPoint] = React.useState(new THREE.Vector3(0, 1.6, 0))
 
 
 const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
@@ -325,6 +328,53 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
       window.removeEventListener('keyup', handleKeyUp)
     }
   }, [])
+
+  // Personalised home generation
+  React.useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        setHomeConfig('loading')
+        // Get geometry for project 1
+        const data = await api('/api/batisse/projects/1/geometry')
+        if (cancelled) return
+        const roomList: any[] = data.rooms || []
+
+        if (data.ready_for_3d && data.geometry) {
+          try {
+            // Export as GLB
+            const glb = await api('/api/batisse/projects/1/geometry/export-glb', { method: 'POST' })
+            const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null
+            if (cancelled) return
+            if (loaded) {
+              setHomeGeometry(loaded)
+              setHomeConfig('generated')
+              // Set spawn point outside the home (in front of the entrance)
+              setSpawnPoint(new THREE.Vector3(0, 1.6, -10))
+              return
+            }
+          } catch {
+            /* fall through to geometry-derived */
+          }
+        }
+        // Geometry-derived fallback
+        setHomeGeometry(createGeometryDerivedScene(roomList))
+        setHomeConfig('generated')
+        // Set spawn point outside geometry-derived home
+        setSpawnPoint(new THREE.Vector3(0, 1.6, -8))
+      } catch {
+        if (cancelled) return
+        setHomeConfig('error')
+        setError('Failed to generate home')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
 
 // Mouse look effect
   React.useEffect(() => {
@@ -413,6 +463,11 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
     <Card title="BATISSE — Floor Plan & 3D Home" color="#3b82f6" description="Upload a floor plan and explore your 3D dollhouse.">
       <small style={{ color: '#94a3b8' }}>
         Scene: {sceneType.replace('_', ' ')} · {rooms.length} rooms
+        {homeConfig !== 'none' && (
+          <span style={{ marginLeft: '1rem', color: '#64748b' }}>
+            {homeConfig === 'generated' ? 'Home generated' : homeConfig === 'error' ? 'Home error' : 'Home loading'}
+          </span>
+        )}
       </small>
       <div style={{ margin: '1rem 0' }}>
         {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} />}
@@ -424,6 +479,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
           toggleLunaFollowing={toggleLunaFollowing}
           setLunaExpression={setLunaExpression}
         />
+        <ExteriorEnvironment />
       </div>
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
       {rooms.length > 0 && (
@@ -537,6 +593,186 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     }}>
       {/* Luna is rendered via Three.js in the scene */}
     </group>
+  )
+}
+
+// ─── Exterior Environment ───
+function ExteriorEnvironment() {
+  // Sky and sunlight
+  const sky = React.useRef<THREE.Group | null>(null)
+  const sun = React.useRef<THREE.DirectionalLight | null>(null)
+
+  React.useEffect(() => {
+    // Create sky group
+    sky.current = new THREE.Group()
+    sky.current.name = 'exterior-environment'
+
+    // Create sun
+    sun.current = new THREE.DirectionalLight(0xffffff, 1.0)
+    sun.current.position.set(50, 50, 50)
+    sky.current.add(sun.current)
+
+    // Create ambient light
+    const ambient = new THREE.AmbientLight(0x404040, 0.5)
+    sky.current.add(ambient)
+
+    // Create ground plane
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(500, 500),
+      new THREE.MeshStandardMaterial({ color: 0x2a2e37 })
+    )
+    ground.rotation.x = -Math.PI / 2
+    ground.position.y = 0
+    sky.current.add(ground)
+
+    return scene => {
+      if (scene.getObjectByName('exterior-environment')) {
+        scene.remove(scene.getObjectByName('exterior-environment'))
+      }
+    }
+  }, [])
+
+  // Add to scene when model is available
+  React.useEffect(() => {
+    const mount = document.getElementById('three-viewer')
+    if (!mount || !model) return
+    
+    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    renderer.setSize(mount.clientWidth, mount.clientHeight)
+    mount.appendChild(renderer.domElement)
+
+    const scene = new THREE.Scene()
+    scene.background = new THREE.Color(0x87ceeb) // Sky blue
+
+    // Add environment
+    if (sky.current) {
+      scene.add(sky.current)
+    }
+
+    const camera = new THREE.PerspectiveCamera(60, mount.clientWidth / mount.clientHeight, 0.1, 1000)
+    camera.position.set(0, 2, 10)
+
+    const rendererRef = renderer
+    let raf = 0
+    const animate = () => {
+      raf = requestAnimationFrame(animate)
+      rendererRef.render(scene, camera)
+    }
+    animate()
+
+    return () => {
+      cancelAnimationFrame(raf)
+      rendererRef.dispose()
+      if (rendererRef.domElement.parentNode === mount) {
+        mount.removeChild(rendererRef.domElement)
+      }
+    }
+  }, [model])
+
+  return null
+}
+
+// ─── Avatar Customisation ───
+function AvatarCustomisation({ 
+  avatarType, 
+  setAvatarType, 
+  avatarColors, 
+  setAvatarColors, 
+  avatarProps,
+  setAvatarProps 
+ }: {
+  avatarType: string
+  setAvatarType: React.Dispatch<React.SetStateAction<string>>
+  avatarColors: { primary: number; secondary: number }
+  setAvatarColors: React.Dispatch<React.SetStateAction<{ primary: number; secondary: number }>}
+  avatarProps: any
+  setAvatarProps: React.Dispatch<React.SetStateAction<any>>
+}) {
+  const handleTypeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setAvatarType(e.target.value)
+    setAvatarProps(prev => ({ ...prev, type: e.target.value }))
+  }
+
+  const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const color = parseInt(e.target.value.replace('#', ''), 16)
+    setAvatarColors(prev => ({ ...prev, [e.target.name]: color }))
+    setAvatarProps(prev => ({ ...prev, [e.target.name]: color }))
+  }
+
+  return (
+    <Card title="Avatar Customisation" color="#6c5ce7" description="Customize your avatar appearance">
+      <div style={{ padding: '1rem' }}>
+        <label style={{ display: 'block', marginBottom: '0.5rem', color: '#e0e7ff' }}>Avatar Type</label>
+        <select
+          value={avatarType}
+          onChange={handleTypeChange}
+          style={{
+            width: '100%',
+            padding: '0.5rem',
+            background: '#0f172a',
+            border: '1px solid #3b3d4e',
+            borderRadius: 6,
+            color: '#e0e7ff',
+            marginBottom: '1rem',
+          }}
+        >
+          <option value="human">Human</option>
+          <option value="elf">Elf</option>
+          <option value="cat">Cat Person</option>
+          <option value="dog">Dog Person</option>
+        </select>
+
+        <label style={{ display: 'block', marginBottom: '0.5rem', color: '#e0e7ff' }}>Primary Color</label>
+        <input
+          type="color"
+          value="#" + avatarColors.primary.toString(16).padStart(6, '0')
+          onChange={handleColorChange}
+          name="primary"
+          style={{
+            width: '100%',
+            height: '3rem',
+            padding: '0',
+            background: '#' + avatarColors.primary.toString(16).padStart(6, '0'),
+            border: 'none',
+            cursor: 'pointer',
+          }}
+        />
+        <label style={{ display: 'block', marginBottom: '1rem', color: '#e0e7ff' }}>Secondary Color</label>
+        <input
+          type="color"
+          value="#" + avatarColors.secondary.toString(16).padStart(6, '0')
+          onChange={handleColorChange}
+          name="secondary"
+          style={{
+            width: '100%',
+            height: '3rem',
+            padding: '0',
+            background: '#' + avatarColors.secondary.toString(16).padStart(6, '0'),
+            border: 'none',
+            cursor: 'pointer',
+          }}
+        />
+
+        {/* Avatar preview - simplified */}
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            background: 'rgba(255,255,255,0.1)',
+            border: '2px solid #6c5ce7',
+            borderRadius: 50,
+            margin: '1rem auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#e0e7ff',
+            fontSize: '1rem',
+          }}
+        >
+          {avatarType === 'human' ? '👤' : avatarType === 'elf' ? '🧝' : '🐱'}
+        </div>
+      </div>
+    </Card>
   )
 }
 

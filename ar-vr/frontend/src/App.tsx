@@ -81,15 +81,19 @@ function usePlayerController(
         case 'ControlLeft': if (options.canCrouch) setState(s => ({ ...s, crouch: true }))
       }
     }
-    const keyup = (e: KeyboardEvent) => {
+const keyup = (e: KeyboardEvent) => {
       switch (e.code) {
-        case 'KeyW': setState(s => ({ ...s, forward: false }))
-        case 'KeyS': setState(s => ({ ...s, backward: false }))
-        case 'KeyA': setState(s => ({ ...s, left: false }))
-        case 'KeyD': setState(s => ({ ...s, right: false }))
-        case 'Space': setState(s => ({ ...s, jump: false }))
-        case 'ShiftLeft': setState(s => ({ ...s, sprint: false }))
-        case 'ControlLeft': setState(s => ({ ...s, crouch: false }))
+        case 'KeyW': setKeys(s => ({ ...s, forward: false }))
+        case 'KeyS': setKeys(s => ({ ...s, backward: false }))
+        case 'KeyA': setKeys(s => ({ ...s, left: false }))
+        case 'KeyD': setKeys(s => ({ ...s, right: false }))
+        case 'Space': setKeys(s => ({ ...s, jump: false }))
+        case 'ShiftLeft': setKeys(s => ({ ...s, sprint: false }))
+        case 'ControlLeft': setKeys(s => ({ ...s, crouch: false }))
+      }
+      // Door interaction: E key release
+      if (e.code === 'KeyE' && currentRoom) {
+        handleDoorInteraction(currentRoom, 'front')
       }
     }
     window.addEventListener('keydown', keydown)
@@ -291,12 +295,18 @@ function BatissePage({ toast }: { toast: Notify }) {
   const [currentRoom, setCurrentRoom] = useState<string | null>(null)
 
 
-  const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
+const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
   const [playerPerspective, setPlayerPerspective] = React.useState<'first' | 'third'>('first')
-  const [playerVelocity, setPlayerVelocity] = React.useState(0)
+  const [playerVelocity, setPlayerVelocity] = React.useState(new THREE.Vector3(0, 0, 0))
   const [isGrounded, setIsGrounded] = React.useState(true)
   const [isSprinting, setIsSprinting] = React.useState(false)
   const [isCrouching, setIsCrouching] = React.useState(false)
+
+  // Keyboard state
+  const keys = React.useState({
+    forward: false, backward: false, left: false, right: false,
+    jump: false, sprint: false, crouch: false,
+  })[1]
 
   // F5 toggle for perspective
   React.useEffect(() => {
@@ -305,45 +315,41 @@ function BatissePage({ toast }: { toast: Notify }) {
         setPlayerPerspective(prev => prev === 'first' ? 'third' : 'first')
       }
     }
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'F5') {}
+    }
     window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])n
-
-  // Movement physics
-  React.useEffect(() => {
-    const speed = isSprinting ? 7 : isCrouching ? 2 : 4
-    
-    // Simple movement - in a full implementation, this would use camera direction
-    if (playerPerspective === 'first') {
-      // First-person: move relative to camera
-      // ... movement logic
-    } else {
-      // Third-person: basic forward movement
-      // ... movement logic
+    window.addEventListener('keyup', handleKeyUp)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
     }
-    
-    // Apply gravity
-    playerVelocity.current += -0.98 * 0.016
-    playerPos.y += playerVelocity.current * 0.016
-    
-    // Ground check
-    if (playerPos.y < 0) {
-      playerPos.y = 0
-      playerVelocity.current = 0
-      setIsGrounded(true)
-    }
-  }, [isSprinting, isCrouching])
+  }, [])
 
-  // Handle F5 press for perspective toggle
+// Mouse look effect
   React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'F5') {
-        setPlayerPerspective(prev => prev === 'first' ? 'third' : 'first')
+    const mount = document.getElementById('three-viewer')
+    if (!mount) return
+    const mouseMove = (e: MouseEvent) => {
+      if (playerPerspective === 'first') {
+        const sensitivity = 0.002
+        playerPos.x -= e.movementX * sensitivity
+        playerPos.z += e.movementY * sensitivity
       }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])n  useEffect(() => {
+    mount.addEventListener('mousemove', mouseMove)
+    return () => mount.removeEventListener('mousemove', mouseMove)
+  }, [playerPerspective])
+
+  // Player movement and physics
+  React.useEffect(() => {
+    const speed = isSprinting ? 7 : isCrouching ? 2 : 4
+    const dt = 0.016
+    \n  // Calculate movement direction\n  const direction = new THREE.Vector3(0, 0, 0)
+  \n  if (keys.forward) direction.z -= 1\n  if (keys.backward) direction.z += 1\n  if (keys.left) direction.x -= 1\n  if (keys.right) direction.x += 1
+  \n  // Apply camera orientation for first-person movement\n  if (playerPerspective === 'first') {\n    const orientation = new THREE.Euler(0, playerPos.y, 0, 'YXZ')\n    direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerPos.y)\n  }\n  direction.multiplyScalar(speed * dt)\n  position.current.add(direction)\n  \n  // Jump physics\n  if (keys.jump && onGround.current) {\n    velocity.current.y = 5\n    onGround.current = false\n  }\n  \n  // Gravity\n  velocity.current.y += -9.8 * dt\n  position.current.y += velocity.current.y * dt\n  \n  // Ground check\n  if (position.current.y < 0) {\n    position.current.y = 0\n    velocity.current.y = 0\n    setIsGrounded(true)\n  } else {\n    setIsGrounded(false)\n  }\n\n  // Sync playerPos state\n  setPlayerPos(position.current)\n  setIsSprinting(keys.sprint)\n  setIsCrouching(keys.crouch)\n}, [keys, isSprinting, isCrouching, onGround])
+
+  // Keyboard handling\n  React.useEffect(() => {\n    const keydown = (e: KeyboardEvent) => {\n      switch (e.code) {\n        case 'KeyW': setKeys(s => ({ ...s, forward: true }))\n        case 'KeyS': setKeys(s => ({ ...s, backward: true }))\n        case 'KeyA': setKeys(s => ({ ...s, left: true }))\n        case 'KeyD': setKeys(s => ({ ...s, right: true }))\n        case 'Space': setKeys(s => ({ ...s, jump: true }))\n        case 'ShiftLeft': setKeys(s => ({ ...s, sprint: true }))\n        case 'ControlLeft': setKeys(s => ({ ...s, crouch: true }))\n      }\n    }\n    const keyup = (e: KeyboardEvent) => {\n      switch (e.code) {\n        case 'KeyW': setKeys(s => ({ ...s, forward: false }))\n        case 'KeyS': setKeys(s => ({ ...s, backward: false }))\n        case 'KeyA': setKeys(s => ({ ...s, left: false }))\n        case 'KeyD': setKeys(s => ({ ...s, right: false }))\n        case 'Space': setKeys(s => ({ ...s, jump: false }))\n        case 'ShiftLeft': setKeys(s => ({ ...s, sprint: false }))\n        case 'ControlLeft': setKeys(s => ({ ...s, crouch: false }))\n      }\n    }\n    window.addEventListener('keydown', keydown)\n    window.addEventListener('keyup', keyup)\n    return () => {\n      window.removeEventListener('keydown', keydown)\n      window.removeEventListener('keyup', keyup)\n    }\n  }, [])\n\n  // Camera system with F5 toggle and smooth transition\n  React.useEffect(() => {\n    const transitionDuration = 250\n    \n    const updateCamera = () => {\n      if (playerPerspective === 'first') {\n        // First-person: camera at player position\n        camera.position.copy(position.current)\n      } else {\n        // Third-person: position behind player\n        const targetPos = position.current.clone().set(position.current.x - 8, position.current.y + 2, position.current.z)\n        camera.position.lerp(targetPos, 0.1)\n      }\n      camera.lookAt(position.current)\n    }\n    \n    // Initial camera setup\n    updateCamera()\n    \n    // Animation loop for smooth camera transition\n    let raf: number\n    const animateCamera = () => {\n      updateCamera()\n      raf = requestAnimationFrame(animateCamera)\n    }\n    animateCamera()\n    \n    return () => cancelAnimationFrame(raf)\n  }, [playerPerspective, position, camera])\n\n  // Door interaction handling\n  const handleDoorInteraction = (roomId: string, doorSide: 'front' | 'back' | 'left' | 'right') => {\n    api(`/api/navigation/set-room/${USER_ID}/${roomId}`, { method: 'POST' })\n      .then(() => toast(\`Moved to room ${roomId} via ${doorSide} door\`))\n      .catch(() => toast('Door navigation failed'))\n  }\n\n  // Luna companion state\n  const [lunaState, setLunaState] = React.useState<'idle' | 'following' | 'expressions'>('idle')\n  \n  React.useEffect(() => {\n    const fetchLunaState = async () => {\n      try {\n        const state = await api('/api/luna/state/get_state')\n        setLunaState(state.state || 'idle')\n      } catch {\n        setLunaState('idle')\n      }\n    }\n    fetchLunaState()\n    const interval = setInterval(fetchLunaState, 5000)\n    return () => clearInterval(interval)\n  }, [])n\n\n  const toggleLunaFollowing = () => {\n    api('/api/luna/state/toggle_following', { method: 'POST' })\n      .then(() => toast('Luna following toggled'))\n      .catch(() => toast('Failed to toggle Luna following'))\n  }\n\n  const setLunaExpression = (expression: string) => {\n    api('/api/luna/state/set_expression', { method: 'POST', body: JSON.stringify({ expression }) })\n      .then(() => toast(`Luna expression set to ${expression}`))\n      .catch(() => toast('Failed to set Luna expression'))\n  }\n\n  useEffect(() => {\n    let cancelled = false\n    ;(async () => {\n      try {\n        const data = await api('/api/batisse/projects/1/geometry')\n        if (cancelled) return\n        const roomList: any[] = data.rooms || []\n        setRooms(roomList)\n\n        if (data.ready_for_3d && data.geometry) {\n          try {\n            const glb = await api('/api/batisse/projects/1/geometry/export-glb', { method: 'POST' })\n            const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null\n            if (cancelled) return\n            if (loaded) {\n              setSceneType(SceneType.ACTUAL_BATISSE)\n              setModel(loaded)\n              return\n            }\n          } catch {\n            /* fall through to geometry-derived */\n          }\n          setSceneType(SceneType.GEOMETRY_DERIVED)\n          setModel(createGeometryDerivedScene(roomList))\n        } else {\n          setSceneType(SceneType.GEOMETRY_DERIVED)\n          setModel(createGeometryDerivedScene(roomList))\n        }\n      } catch {\n        if (cancelled) return\n        setError('BATISSE backend unavailable — showing placeholder scene')\n        setSceneType(SceneType.PLACEHOLDER)\n        setModel(createPlaceholderScene())\n      } finally {\n        if (!cancelled) setLoading(false)\n      }\n    })()\n    return () => {\n      cancelled = true\n    }\n  }, [])\n\n  const handleRoomClick = (roomId: string) => {\n    setCurrentRoom(roomId)\n    api(`/api/navigation/set-room/${USER_ID}/${roomId}`, { method: 'POST' })\n      .then(() => toast(`Moved to room ${roomId}`))\n      .catch(() => toast('Navigation failed'))\n  }\n\n  const upload = () => {\n    setLoading(true)\n    api('/api/batisse/upload', {\n      method: 'POST',\n      body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),\n    })\n
     let cancelled = false
     ;(async () => {
       try {
@@ -410,6 +416,14 @@ function BatissePage({ toast }: { toast: Notify }) {
       </small>
       <div style={{ margin: '1rem 0' }}>
         {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} />}
+        <LunaCompanion
+          playerPos={playerPos}
+          playerPerspective={playerPerspective}
+          lunaState={lunaState}
+          setLunaState={setLunaState}
+          toggleLunaFollowing={toggleLunaFollowing}
+          setLunaExpression={setLunaExpression}
+        />
       </div>
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
       {rooms.length > 0 && (
@@ -435,10 +449,94 @@ function BatissePage({ toast }: { toast: Notify }) {
           })}
         </div>
       )}
+      {/* Door interaction hints */}
+      {currentRoom && (
+        <div style={{ position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)', color: '#94a3b8', fontSize: '0.75rem', textAlign: 'center' }}>
+          <span>Press <kbd>E</kbd> to enter {currentRoom}</span>
+        </div>
+      )}
+      {/* HUD: hotbar and perspective indicator */}
+      <Hotbar selectedSlot={selectedSlot} inventory={inventory} setInventory={setInventory} />
+      <PerspectiveIndicator perspective={playerPerspective} />
       <button onClick={upload} disabled={loading} style={buttonStyle('#64a8d6')}>
         {loading ? 'Working…' : 'Upload Floor Plan →'}
       </button>
     </Card>
+  )
+}
+
+// ─── Luna Companion ───
+function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, toggleLunaFollowing, setLunaExpression }: {
+  playerPos: THREE.Vector3
+  playerPerspective: 'first' | 'third'
+  lunaState: string
+  setLunaState: React.Dispatch<React.SetStateAction<string>>
+  toggleLunaFollowing: () => void
+  setLunaExpression: (expression: string) => void
+}) {
+  // Luna's position follows the player
+  const lunaPosition = React.useRef(new THREE.Vector3(playerPos.x, playerPos.y + 1, playerPos.z))
+
+  // Update Luna's position to follow player
+  React.useEffect(() => {
+    lunaPosition.current.x = playerPos.x
+    lunaPosition.current.y = playerPos.y + 1
+    lunaPosition.current.z = playerPos.z
+  }, [playerPos.x, playerPos.y, playerPos.z])
+
+  // Update Luna state based on following toggled
+  React.useEffect(() => {
+    if (lunaState === 'following') {
+      // Luna follows player - already handled by position update
+    }
+  }, [lunaState])
+
+  // Luna expressions
+  const expressions = ['idle', 'happy', 'thinking', 'walking']
+  const expressionIndex = expressions.indexOf(lunaState) || 0
+
+  // Change expression periodically when following
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      const nextIndex = (expressionIndex + 1) % expressions.length
+      setLunaExpression(expressions[nextIndex])
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [lunaState])
+
+  // Luna 3D model
+  const lunaMesh = React.useRef<THREE.Mesh | null>(null)
+
+  React.useEffect(() => {
+    const geometry = new THREE.SphereGeometry(0.5, 16, 16)
+    const material = new THREE.MeshStandardMaterial({ color: 0x00ffcc })
+    lunaMesh.current = new THREE.Mesh(geometry, material)
+    lunaMesh.current.position.copy(lunaPosition.current)
+  }, [])
+
+  // Luna following behavior
+  React.useEffect(() => {
+    const animate = () => {
+      if (lunaMesh.current) {
+        // Smooth follow with slight lag
+        lunaMesh.current.lerp(lunaPosition.current, 0.1)
+        // Turn toward player
+        lunaMesh.current.lookAt(playerPos)
+      }
+      requestAnimationFrame(animate)
+    }
+    animate()
+  }, [lunaMesh, playerPos])
+
+  return (
+    <group ref={lunaMesh} style={{
+      position: 'absolute',
+      width: 100,
+      height: 100,
+      pointerEvents: 'none'
+    }}>
+      {/* Luna is rendered via Three.js in the scene */}
+    </group>
   )
 }
 
@@ -556,6 +654,91 @@ const navItems = [
   { to: '/jewellery', label: 'VELARIS' },
   { to: '/luna', label: 'Luna' },
 ]
+
+// ─── HUD ───
+function useHUD() {
+  const [selectedSlot, setSelectedSlot] = React.useState(0)
+  const [inventory, setInventory] = React.useState<Array<number | null>>(Array(9).fill(null))
+  const [isPaused, setIsPaused] = React.useState(false)
+
+  // Hotbar selection
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const slot = parseInt(e.key, 10)
+      if (slot >= 1 && slot <= 9) {
+        setSelectedSlot(slot - 1)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])n
+
+  const togglePause = () => setIsPaused(prev => !prev)
+  return { selectedSlot, inventory, setInventory, isPaused, togglePause }
+}
+
+// ─── In-world HUD ───
+function Hotbar({ selectedSlot: slot, inventory, setInventory }: { selectedSlot: number; inventory: Array<number | null>; setInventory: React.Dispatch<React.SetStateAction<Array<number | null>>> }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        bottom: 80,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        display: 'flex',
+        gap: 4,
+        padding: '4px',
+        background: 'rgba(15, 23, 42, 0.8)',
+        borderRadius: 12,
+        zIndex: 10,
+      }}
+    >
+      {inventory.map((item, i) => (
+        <div
+          key={i}
+          style={{
+            width: 32,
+            height: 32,
+            background: i === slot ? 'rgba(255, 255, 255, 0.3)' : 'rgba(255, 255, 255, 0.1)',
+            border: `2px solid ${i === slot ? '#3b82f6' : 'transparent'}`,
+            borderRadius: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#e0e7ff',
+            fontSize: '1rem',
+            cursor: 'pointer',
+          }}
+          onClick={() => setSelectedSlot(i)}
+        >
+          {item !== null ? item : '▢'}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function PerspectiveIndicator({ perspective }: { perspective: 'first' | 'third' }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: 80,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: 'rgba(15, 23, 42, 0.8)',
+        border: '1px solid #3b82f6',
+        borderRadius: 6,
+        padding: '0.5rem 1rem',
+        color: '#e0e7ff',
+        fontSize: '0.75rem',
+        zIndex: 10,
+      }}
+    >
+      {perspective === 'first' ? 'First-Person' : 'Third-Person'}
+    </div>
+}
 
 export default function App() {
   const { message, show: toast } = useToast()

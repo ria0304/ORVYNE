@@ -31,21 +31,20 @@ ar-vr/
 │   │       ├── tryon_service.py     # TryOn adapter
 │   │       ├── velaris_service.py   # VELARIS adapter
 │   │       └── __init__.py
+│   ├── config.py                # Top-level config module
 │   ├── requirements.txt         # ar-vr specific dependencies
-│   ├── .env.example             # Environment variables for local development
+│   ├── env.example              # Environment variables template (copy to .env)
 │   └── arvr_integration.db      # SQLite integration database (auto-created)
 ├ frontend/
 │   ├── src/
-│   │   ├── App.tsx              # Complete React+Three.js frontend
-│   │   ├── components/          # Reusable 3D/UI components
-│   │   └── pages/               # BATISSE/WYA/TryOn/VELARIS/Luna pages
-│   ├── vite.config.ts           # Vite config, port 2000
-│   └── index.html               # HTML entry point
-├ blender/
-│   └── scripts/                 # Python scripts for 3D automation
+│   │   ├── main.tsx             # React entry point
+│   │   └── App.tsx              # Complete React+Three.js frontend
+│   ├── package.json             # "type": "module" (ESM) — see Troubleshooting
+│   └── vite.config.ts           # Vite config, port 2000
 ├ tests/
-│   └── test_integration.py      # 23-test suite (23/23 pass)
-└ assets/                        # 3D models, textures (procedurally generated)
+│   └── test_integration.py      # Integration test suite
+├ pyproject.toml
+└ package-lock.json
 ```
 
 ## Integration Philosophy
@@ -85,7 +84,7 @@ See the `backend/app/main.py` for the FastAPI setup. This phase establishes:
 ### Quick Start
 
 ```bash
-# 1. From the vr/ root directory
+# 1. From the repository root
 cd ar-vr/backend
 
 # 2. Install backend dependencies
@@ -97,7 +96,7 @@ cp env.example .env
 
 # 4. Initialize the database
 python -c "from app.database import init_db; init_db()"
-# Or simply: python -m pytest tests/test_integration.py (init_db runs implicitly)
+# Or simply run the tests (init_db runs implicitly)
 
 # 5. Start the FastAPI backend (port 8001)
 uvicorn app.main:app --reload --host 127.0.0.1
@@ -109,7 +108,7 @@ npm run dev
 ```
 
 The integration backend will be available at `http://127.0.0.1:8001`
-The frontend will be available at `http://localhost:5173`
+The frontend will be available at `http://localhost:2000` (also exposed on your LAN IP, since `server.host` is `true`)
 
 ### Environment Variables
 
@@ -132,11 +131,12 @@ INTEGRATION_JWT_SECRET=ar-vr-dev-secret-change-in-production
 DATABASE_URL=sqlite:///./arvr_integration.db
 
 # CORS — frontend origins that can call the integration API
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+# Must include the Vite dev server origin (port 2000)
+CORS_ORIGINS=http://localhost:2000,http://127.0.0.1:2000,http://localhost:5173,http://127.0.0.1:5173
 
 # WYA specific
 WYA_APP_BASE_URL=http://127.0.0.1:8000
-ALLOWED_ORIGINS=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:2000
 ```
 
 ### API Endpoints
@@ -184,11 +184,11 @@ Total: 22 unique endpoints (some paths shared via GET/HEAD for docs)
 Run the integration test suite:
 
 ```bash
-cd ar-vr/backend
+cd ar-vr
 python -m pytest tests/test_integration.py -v
 ```
 
-Result: **23/23 pass** (covering health, schemas, service imports, BATISSE endpoints, WYA endpoints, TryOn endpoints, VELARIS endpoints, integration routing, and all 6 Pydantic schemas)
+Covers health, schemas, service imports, BATISSE endpoints, WYA endpoints, TryOn endpoints, VELARIS endpoints, integration routing, and the Pydantic schemas.
 
 ### Frontend
 
@@ -241,6 +241,15 @@ Each service adapter (batisse_service.py, wya_service.py, tryon_service.py, vela
 
 `import httpx` is placed inside methods (not at module level) in `velaris_service.py` to avoid import errors when the backend is unreachable. 3D mesh generation (parametric rings, necklaces, bracelets, earrings with PBR materials) works when the VELARIS backend is reachable.
 
-### AWS/CloudFront
 
-Removed from WYA and luna-stylist configuration. Local development only. `env.example` files updated for local dev URLs.
+
+## Troubleshooting
+
+### Vite warning: `configLoader: 'native'` / ESM syntax in `vite.config.ts` loaded as CommonJS
+
+```
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'` ...
+  - ESM syntax in a file loaded as CommonJS (vite.config.ts:1:1).
+```
+
+Fixed by `"type": "module"` in `frontend/package.json`, which makes Vite load `vite.config.ts` as ESM. If you still see it, make sure you are using the updated `package.json` and re-run `npm run dev`. Alternatives: rename the config to `vite.config.mts`, or set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress it.

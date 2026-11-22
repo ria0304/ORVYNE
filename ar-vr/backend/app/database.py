@@ -171,6 +171,30 @@ class DesignSaves(Base):
     )
 
 
+# ── Luna state persistence ──────────────────────────────────────────────────
+
+class LunaState(BaseModelMixin, Base):
+    """Luna robot companion state persistence.
+
+    Stores Luna following preferences and state per user account.
+    This is separate from design records and outfit saves.
+    """
+
+    __tablename__ = "luna_state"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(255), nullable=False, index=True)
+    is_following = Column(Boolean, default=True)
+    following_offset = Column(JSON, nullable=True, default=dict)  # [x, y, z] offset
+    current_expression = Column(String(50), default="idle")  # idle, talking, thinking, happy, pointing
+    dismissible = Column(Boolean, default=True)
+    last_seen = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_luna_state_user_id", "user_id"),
+    )
+
+
 # ── Engine helpers ────────────────────────────────────────────────────────────
 
 def init_db() -> None:

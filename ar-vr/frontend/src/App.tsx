@@ -38,6 +38,109 @@ enum SceneType {
   PLACEHOLDER = 'placeholder',
 }
 
+
+// ─── Player Controller ──────────────────────────────────────────────────────
+function usePlayerController(
+  camera: THREE.PerspectiveCamera,
+  options: { canJump: boolean; canSprint: boolean; canCrouch: boolean }
+) {
+  const [state, setState] = React.useState<{
+    forward: boolean
+    backward: boolean
+    left: boolean
+    right: boolean
+    jump: boolean
+    sprint: boolean
+    crouch: boolean
+  }>({
+    forward: false,
+    backward: false,
+    left: false,
+    right: false,
+    jump: false,
+    sprint: false,
+    crouch: false,
+  })
+
+  const velocity = React.useRef(0)
+  const position = React.useRef(new THREE.Vector3(0, 1.6, 0))
+  const direction = React.useRef(new THREE.Vector3(0, 0, -1))
+  const onGround = React.useRef(true)
+  const jumpRequested = React.useRef(false)
+
+  // Keyboard handling
+  React.useEffect(() => {
+    const keydown = (e: KeyboardEvent) => {
+      switch (e.code) {
+        case 'KeyW': setState(s => ({ ...s, forward: true }))
+        case 'KeyS': setState(s => ({ ...s, backward: true }))
+        case 'KeyA': setState(s => ({ ...s, left: true }))
+        case 'KeyD': setState(s => ({ ...s, right: true }))
+        case 'Space': if (options.canJump) setState(s => ({ ...s, jump: true }))
+        case 'ShiftLeft': if (options.canSprint) setState(s => ({ ...s, sprint: true }))
+        case 'ControlLeft': if (options.canCrouch) setState(s => ({ ...s, crouch: true }))
+      }
+    }
+    const keyup = (e: KeyboardEvent) => {
+      switch (e.code) {
+        case 'KeyW': setState(s => ({ ...s, forward: false }))
+        case 'KeyS': setState(s => ({ ...s, backward: false }))
+        case 'KeyA': setState(s => ({ ...s, left: false }))
+        case 'KeyD': setState(s => ({ ...s, right: false }))
+        case 'Space': setState(s => ({ ...s, jump: false }))
+        case 'ShiftLeft': setState(s => ({ ...s, sprint: false }))
+        case 'ControlLeft': setState(s => ({ ...s, crouch: false }))
+      }
+    }
+    window.addEventListener('keydown', keydown)
+    window.addEventListener('keyup', keyup)
+    return () => {
+      window.removeEventListener('keydown', keydown)
+      window.removeEventListener('keyup', keyup)
+    }
+  }, [options.canJump, options.canSprint, options.canCrouch])
+
+  // Mouse look
+  React.useEffect(() => {
+    const mouseMove = (e: MouseEvent) => {
+      // Update camera rotation based on mouse delta
+    }
+    const mount = document.getElementById('three-viewer')
+    if (mount) {
+      mount.addEventListener('mousemove', mouseMove)
+    }
+    return () => mouseRef.current && mouseRef.current.removeEventListener('mousemove', mouseMove)
+  }, [])n
+
+  // Physics and movement
+  React.useEffect(() => {
+    const speed = state.sprint ? 7 : state.crouch ? 2 : 4
+    // Calculate movement direction
+    const moveX = (state.forward ? 1 : -1) * speed * 0.016 + (state.left ? -1 : state.right ? 1 : 0) * speed * 0.016
+    const moveZ = (state.forward ? 1 : -1) * speed * 0.016
+    position.current.x += moveX
+    position.current.z += moveZ
+    
+    // Jump physics
+    if (state.jump && onGround.current) {
+      velocity.current = 5
+      onGround.current = false
+    }
+    velocity.current += -9.8 * 0.016 // gravity
+    position.current.y += velocity.current * 0.016
+    
+    // Ground check
+    if (position.current.y < 0) {
+      position.current.y = 0
+      velocity.current = 0
+      onGround.current = true
+    }
+    
+    camera.position.copy(position.current)
+  }, [state, camera, options])
+
+  return { state, position: position.current, onGround }
+}
 const mat = (color: number) => new THREE.MeshStandardMaterial({ color })
 
 function baseRoom(group: THREE.Group, w = 10, d = 10) {
@@ -187,7 +290,60 @@ function BatissePage({ toast }: { toast: Notify }) {
   const [loading, setLoading] = useState(true)
   const [currentRoom, setCurrentRoom] = useState<string | null>(null)
 
-  useEffect(() => {
+
+  const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
+  const [playerPerspective, setPlayerPerspective] = React.useState<'first' | 'third'>('first')
+  const [playerVelocity, setPlayerVelocity] = React.useState(0)
+  const [isGrounded, setIsGrounded] = React.useState(true)
+  const [isSprinting, setIsSprinting] = React.useState(false)
+  const [isCrouching, setIsCrouching] = React.useState(false)
+
+  // F5 toggle for perspective
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'F5') {
+        setPlayerPerspective(prev => prev === 'first' ? 'third' : 'first')
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])n
+
+  // Movement physics
+  React.useEffect(() => {
+    const speed = isSprinting ? 7 : isCrouching ? 2 : 4
+    
+    // Simple movement - in a full implementation, this would use camera direction
+    if (playerPerspective === 'first') {
+      // First-person: move relative to camera
+      // ... movement logic
+    } else {
+      // Third-person: basic forward movement
+      // ... movement logic
+    }
+    
+    // Apply gravity
+    playerVelocity.current += -0.98 * 0.016
+    playerPos.y += playerVelocity.current * 0.016
+    
+    // Ground check
+    if (playerPos.y < 0) {
+      playerPos.y = 0
+      playerVelocity.current = 0
+      setIsGrounded(true)
+    }
+  }, [isSprinting, isCrouching])
+
+  // Handle F5 press for perspective toggle
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'F5') {
+        setPlayerPerspective(prev => prev === 'first' ? 'third' : 'first')
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])n  useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {

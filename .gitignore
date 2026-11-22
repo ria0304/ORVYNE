@@ -25,3 +25,31 @@ build/
 .pytest_cache/
 .mypy_cache/
 /ar-vr/backend/arvr_integration.db
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Python testing and linting
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Frontend tooling
+.vite/
+coverage/
+
+# Backup and temporary files
+*.backup
+*.bak
+*.orig
+*.tmp
+*~
+
+# Generated logs
+logs/
+
+# OS files
+Thumbs.db

@@ -214,6 +214,14 @@ function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
     const dir = new THREE.DirectionalLight(0xffffff, 0.9)
     dir.position.set(5, 8, 5)
     scene.add(dir)
+    
+    // Add furniture to the scene
+    if (roomFurniture && roomFurniture.length > 0) {
+      roomFurniture.forEach((furn: any) => {
+        scene.add(furn.mesh)
+      })
+    }
+    
     scene.add(model)
 
     const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000)
@@ -245,10 +253,16 @@ function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
       cancelAnimationFrame(raf)
       controls.dispose()
       scene.remove(model)
+      // Remove furniture from scene
+      if (roomFurniture && roomFurniture.length > 0) {
+        roomFurniture.forEach((furn: any) => {
+          scene.remove(furn.mesh)
+        })
+      }
       renderer.dispose()
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
     }
-  }, [model])
+  }, [model, roomFurniture])
 
   return <div ref={mountRef} style={{ width: '100%', height: 400, borderRadius: 8, overflow: 'hidden' }} />
 }
@@ -294,6 +308,8 @@ function BatissePage({ toast }: { toast: Notify }) {
   const [loading, setLoading] = useState(true)
   const [currentRoom, setCurrentRoom] = useState<string | null>(null)
   const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'error'>('none')
+  const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'error'>('none')
+  const [roomFurniture, setRoomFurniture] = useState<any[]>([])
   const [homeGeometry, setHomeGeometry] = useState<any | null>(null)
   const [spawnPoint, setSpawnPoint] = React.useState(new THREE.Vector3(0, 1.6, 0))
 
@@ -360,6 +376,89 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
         // Geometry-derived fallback
         setHomeGeometry(createGeometryDerivedScene(roomList))
         setHomeConfig('generated')
+// Set room furniture based on room type
+        const roomFurniture: any[] = []
+        roomList.forEach((room: any) => {
+          const roomId = String(room.room_id ?? 0)
+          const roomName = (room.room_name ?? '').toLowerCase() || ''
+          
+          // Create furniture based on room function
+          if (roomName.includes('living') || roomName.includes('sitting')) {
+            // Living room furniture
+            const sofa = new THREE.Mesh(
+              new THREE.BoxGeometry(4, 1, 2),
+              new THREE.MeshStandardMaterial({ color: 0x4a4e69 })
+            )
+            sofa.position.set(-2, 0.5, -2)
+            roomFurniture.push({ type: 'sofa', mesh: sofa, roomId })
+            
+            const coffeeTable = new THREE.Mesh(
+              new THREE.BoxGeometry(1.5, 0.5, 1.5),
+              new THREE.MeshStandardMaterial({ color: 0x7a8ba0 })
+            )
+            coffeeTable.position.set(0, 0.25, 0)
+            roomFurniture.push({ type: 'coffee table', mesh: coffeeTable, roomId })
+          }
+          
+          if (roomName.includes('bedroom') || roomName.includes('bed')) {
+            // Bedroom furniture
+            const bed = new THREE.Mesh(
+              new THREE.BoxGeometry(4, 2, 2),
+              new THREE.MeshStandardMaterial({ color: 0x5a3e4f })
+            )
+            bed.position.set(0, 1, 0)
+            roomFurniture.push({ type: 'bed', mesh: bed, roomId })
+            
+            const nightstand = new THREE.Mesh(
+              new THREE.BoxGeometry(1.5, 1.5, 1.5),
+              new THREE.MeshStandardMaterial({ color: 0x5a3e4f })
+            )
+            nightstand.position.set(-3, 0.75, 2)
+            roomFurniture.push({ type: 'nightstand', mesh: nightstand, roomId })
+          }
+          
+          if (roomName.includes('kitchen') || roomName.includes('cook')) {
+            // Kitchen furniture
+            const counter = new THREE.Mesh(
+              new THREE.BoxGeometry(3, 0.5, 0.5),
+              new THREE.MeshStandardMaterial({ color: 0x6b5b96 })
+            )
+            counter.position.set(0, 0.25, -3)
+            roomFurniture.push({ type: 'counter', mesh: counter, roomId })
+          }
+          
+          if (roomName.includes('bathroom') || roomName.includes('bath')) {
+            // Bathroom furniture
+            const vanity = new THREE.Mesh(
+              new THREE.BoxGeometry(2, 0.8, 0.5),
+              new THREE.MeshStandardMaterial({ color: 0x7a8b9e })
+            )
+            vanity.position.set(0, 0.4, -2)
+            roomFurniture.push({ type: 'vanity', mesh: vanity, roomId })
+          }
+          
+          if (roomName.includes('wardrobe') || roomName.includes('closet')) {
+            // Wardrobe furniture
+            const wardrobe = new THREE.Mesh(
+              new THREE.BoxGeometry(2, 2.5, 0.5),
+              new THREE.MeshStandardMaterial({ color: 0x4a3b5e })
+            )
+            wardrobe.position.set(-3, 1.25, 0)
+            roomFurniture.push({ type: 'wardrobe', mesh: wardrobe, roomId })
+          }
+          
+          if (roomName.includes('jewellery') || roomName.includes('studio')) {
+            // Jewellery studio furniture
+            const displayCase = new THREE.Mesh(
+              new THREE.BoxGeometry(2, 1, 1),
+              new THREE.MeshStandardMaterial({ color: 0xd4af37 })
+            )
+            displayCase.position.set(0, 0.5, 0)
+            roomFurniture.push({ type: 'display case', mesh: displayCase, roomId })
+          }
+        })
+        
+        setRoomFurniture(roomFurniture)
         // Set spawn point outside geometry-derived home
         setSpawnPoint(new THREE.Vector3(0, 1.6, -8))
       } catch {
@@ -470,7 +569,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
         )}
       </small>
       <div style={{ margin: '1rem 0' }}>
-        {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} />}
+        {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} roomFurniture={roomFurniture} />}
         <LunaCompanion
           playerPos={playerPos}
           playerPerspective={playerPerspective}
@@ -978,6 +1077,9 @@ function PerspectiveIndicator({ perspective }: { perspective: 'first' | 'third' 
 
 export default function App() {
   const { message, show: toast } = useToast()
+  const [avatarType, setAvatarType] = useState<'human' | 'elf' | 'cat' | 'dog'>('human')
+  const [avatarColors, setAvatarColors] = useState({ primary: 0x6c5ce7, secondary: 0xa29bfe })
+  const [avatarProps, setAvatarProps] = useState({ type: 'human', primary: 0x6c5ce7, secondary: 0xa29bfe })
 
   useEffect(() => {
     fetch(`${BASE_URL}/api/health`)

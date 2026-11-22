@@ -77,7 +77,7 @@ WYA_BASE_URL = os.getenv("WYA_BASE_URL", "http://127.0.0.1:8000")
 # Frontend origins that can call the integration API
 CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173",
+    "http://localhost:2000,http://127.0.0.1:2000,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173",
 ).split(",")
 
 # ─── Model Fallback Chain (for Velaris LLM calls) ───────────────────────────

@@ -15,7 +15,7 @@ from typing import Any, Dict
 from httpx import AsyncClient
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
@@ -141,7 +141,7 @@ async def log_requests(request: Request, call_next):
 # ── Health Check ───────────────────────────────────────────────────────────────
 
 @app.get("/api/health", response_model=IntegrationHealth, tags=["meta"])
-def health() -> IntegrationHealth:
+async def health() -> IntegrationHealth:
     """Integration service health check with downstream service status."""
     db = database.get_db_session()
     try:
@@ -149,33 +149,36 @@ def health() -> IntegrationHealth:
 
         # Check BATISSE
         try:
-            from ar_vr.backend.services import get_batisse_service
+            from app.services.batisse_service import get_batisse_service
             svc = get_batisse_service()
-            # We can't async await in sync function, just check connectivity
+            await svc.ping()
             services["batisse"] = "ok"
         except Exception:
             services["batisse"] = "unreachable"
 
         # Check WYA
         try:
-            from ar_vr.backend.services import get_wya_service
+            from app.services.wya_service import get_wya_service
             svc = get_wya_service()
+            await svc.ping()
             services["wya"] = "ok"
         except Exception:
             services["wya"] = "unreachable"
 
         # Check TryOn
         try:
-            from ar_vr.backend.services import get_tryon_service
+            from app.services.tryon_service import get_tryon_service
             svc = get_tryon_service()
+            await svc.ping()
             services["tryon"] = "ok"
         except Exception:
             services["tryon"] = "unreachable"
 
         # Check VELARIS
         try:
-            from ar_vr.backend.services import get_velaris_service
+            from app.services.velaris_service import get_velaris_service
             svc = get_velaris_service()
+            await svc.ping()
             services["velaris"] = "ok"
         except Exception:
             services["velaris"] = "unreachable"
@@ -413,13 +416,18 @@ async def tryon_generate(
 @app.get(
     "/api/tryon/status",
     tags=["tryon"],
-    summary="Check TryOn pipeline status",
+    summary="Check TryOn pipeline readiness status",
 )
 async def tryon_status() -> Dict[str, Any]:
     """Check the TryOn pipeline readiness status."""
-    # Return status based on TryOn service availability
-    # In production, this would check the actual TryOn backend
-    return {"status": "healthy", "pipeline": "image-based", "initializing": True}
+    # Check TryOn service status via the service adapter
+    try:
+        from app.services.tryon_service import get_tryon_service
+        svc = get_tryon_service()
+        status = await svc.get_tryon_status()
+        return status
+    except Exception:
+        return {"status": "unhealthy", "pipeline": "image-based", "initializing": True}
 
 
 # ── VELARIS — Jewellery boutique ──────────────────────────────────────────────
@@ -501,7 +509,7 @@ async def luna_chat(message: str, token: str, wardrobe_items: dict | None = None
     async with AsyncClient() as client:
         try:
             response = await client.post(
-                f"{WYA_BASE_URL}/luna-api/chat",
+                f"{config.WYA_BASE_URL}/api/luna/chat",
                 json={"message": message, "token": token, "wardrobe_items": wardrobe_items},
                 timeout=15.0,
             )

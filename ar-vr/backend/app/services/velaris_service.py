@@ -26,7 +26,7 @@ from ..schemas import (
 )
 
 # VELARIS backend base URL
-VELARIS_BASE = "http://127.0.0.1:8000"  # configured via config.VELARIS_BASE_URL in production
+from ..config import VELARIS_BASE_URL as VELARIS_BASE  # configured via config.VELARIS_BASE_URL in production
 
 
 # ─── Minimal PBR material definitions ───────────────────────────────────

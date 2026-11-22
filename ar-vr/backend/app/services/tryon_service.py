@@ -23,7 +23,7 @@ from ..schemas import (
 )
 
 # TryOn backend base URL
-TRYON_BASE = "http://127.0.0.1:8000"  # configured via config.TRYON_BASE_URL in production
+from ..config import TRYON_BASE_URL as TRYON_BASE  # configured via config.TRYON_BASE_URL in production
 
 
 class TryOnService:

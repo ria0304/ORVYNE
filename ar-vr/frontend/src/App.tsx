@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer'
 
-const BASE_URL = 'http://127.0.0.1:8001'
+const BASE_URL = 'http://127.0.0.1:8000'
 
 // Helper: call any ORVYNE backend endpoint
 async function api(path: string, init: RequestInit = {}): Promise<any> {
@@ -237,30 +237,12 @@ function formatNumber(num: number): string {
   return `${neg}${absNum}`
 }
 
-// ─── ORVYNE Frontend Component ───
-export default function App() {
+// ─── BATISSE Page Component ───
+function BatissePage() {
   const navigate = useNavigate()
-  const location = useLocation()
   const { show: toast } = useToast()
+  const { loading: loadingBatisse, setLoading: setLoadingBatisse } = useLoadingState(false)
   
-  // Health check on mount
-  useEffect(() => {
-    fetch(`${BASE_URL}/api/health`)
-      .then(res => {
-        if (!res.ok) throw new Error('Backend unavailable')
-      })
-      .catch(() => toast('ORVYNE backend unavailable'))
-  }, [])
-
-  // BATISSE state - track what type of scene we're showing
-  const [batisseSceneType, setBatisseSceneType] = useState<SceneType>(SceneType.PLACEHOLDER)
-  const [batisseLoading, setBatisseLoading] = useState(false)
-  const [batisseError, setBatisseError] = useState<string | null>(null)
-  const [batisseModel, setBatisseModel] = useState<THREE.Group | null>(null)
-  const [batisseRooms, setBatisseRooms] = useState<any[]>([])
-  const [currentRoom, setCurrentRoom] = useState<string | null>(null)
-
-  // Load BATISSE model and room data
   useEffect(() => {
     setBatisseLoading(true)
     
@@ -344,6 +326,446 @@ export default function App() {
   }
 
   return (
+    <div style={{ 
+      padding: '2rem', 
+      background: 'rgba(10, 14, 23, 0.8)',
+      borderRadius: '12px',
+      marginBottom: '1rem',
+      overflow: 'hidden'
+    }}>
+      <header style={{ 
+        margin: '-2rem -2rem 1rem -2rem',
+        padding: '1rem 1.5rem',
+        background: 'linear-gradient(180deg, #1e293b, #0f172a)',
+        borderRadius: '12px 12px 0 0',
+        textAlign: 'center'
+      }}>
+        <h3 style={{ 
+          margin: '0 0 1rem 0', 
+          fontSize: '1.2rem', 
+          background: 'linear-gradient(90deg, #3b82f6, #1d4ed8)',
+          '-webkit-background-clip': 'text', 
+          '-webkit-text-fill-color': 'transparent',
+          borderRadius: '4px'
+        }}>BATISSE — Floor Plan & 3D Home</h3>
+        <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
+          Upload a floor plan and view your 3D dollhouse.
+        </p>
+        <small style={{ color: '#94a3b8' }}>
+          {formatNumber(batisseRooms.length)} rooms•{formatNumber(data?.area_sq_m || 0)} sqm{data?.units ? ` (${data.units})` : ''}
+        </small>
+      </header>
+      
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        minHeight: '300px',
+        background: 'rgba(10, 14, 23, 0.8)',
+        borderRadius: '8px',
+        marginBottom: '1rem',
+        position: 'relative'
+      }}>
+        {/* Room grid overlay with clickable areas */}
+        {batisseRooms.length > 0 && (
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            pointerEvents: 'auto'
+          }}>
+            {batisseRooms.map((room, idx) => {
+              const centerAngle = (idx / Math.max(batisseRooms.length, 1)) * Math.PI * 2
+              const radius = 100
+              const x = radius * Math.cos(centerAngle)
+              const y = radius * Math.sin(centerAngle)
+              
+              return (
+                <div
+                  key={room.room_id}
+                  style={{
+                    position: 'absolute',
+                    width: 100,
+                    height: 100,
+                    left: `${x - 50}px`,
+                    top: `${y - 50}px`,
+                    background: 'rgba(59, 130, 246, 0.3)',
+                    border: '2px solid #3b82f6',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onClick={() => handleRoomClick(room.room_id)}
+                  title={`Room ${room.room_id}: ${room.room_name || 'Unnamed'}`}>
+                  <span style={{
+                    position: 'absolute',
+                    top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                    fontSize: '10px', color: '#fff', textAlign: 'center'
+                  }}>{room.room_id?.substring(0, 6)}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        
+        {batisseModel ? (
+          <div id="three-container" style={{ width: 400, height: 400 }} />
+        ) : (
+          <p style={{ textAlign: 'center', color: '#64748b', marginTop: '5rem' }}>
+            {batisseSceneType === SceneType.ACTUAL_BATISSE
+              ? 'Loading actual BATISSE 3D home...'
+              : batisseSceneType === SceneType.GEOMETRY_DERIVED
+                ? 'Deriving home from floor plan geometry...'
+                : 'Waiting for floor plan...'}
+          </p>
+        )}
+        
+        {batisseError ? (
+          <p style={{ color: '#f87171', marginBottom: '1rem', textAlign: 'center' }}>{batisseError}</p>
+        ) : null}
+        
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          {batisseError ? (
+            <p style={{ color: '#f87171', marginBottom: '1rem' }}>{batisseError}</p>
+          ) : null}
+          
+          <div>
+            <button
+              onClick={() => {
+                setBatisseLoading(true)
+                api('/api/batisse/upload', {
+                  method: 'POST',
+                  body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
+                }).then(() => {
+                  setBatisseLoading(false)
+                  toast('Floor plan uploaded successfully')
+                }).catch(() => {
+                  setBatisseLoading(false)
+                  toast('BATISSE upload failed')
+                })
+              }}
+              disabled={batisseLoading}
+              style={{
+                width: '100%',
+                padding: '0.8rem',
+                background: batisseLoading ? 'rgba(251, 191, 36, 0.2)' : 'rgba(30, 64, 139, 0.8)',
+                border: '1px solid #64a8d6',
+                borderRadius: '8px',
+                color: '#d1d9e1',
+                fontWeight: 500,
+                transition: 'all 0.2s',
+                marginBottom: '0.5rem'
+              }}>
+              {batisseLoading ? 'Uploading...' : 'Upload Floor Plan →'}
+            </button>
+            <small style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
+              (requires BATISSE backend)
+            </small>
+          </div>
+          <br />
+          <small style={{ color: '#94a3b8' }}>
+            {formatNumber(data?.room_count || 0)} rooms•{formatNumber(data?.area_sq_m || 0)} sqm{data?.units ? ` (${data.units})` : ''}
+          </small>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── WYA Page Component ───
+function WyaPage() {
+  const navigate = useNavigate()
+  const { show: toast } = useToast()
+  
+  useEffect(() => {
+    api('/api/wardrobe/browse', {
+      method: 'POST',
+      body: JSON.stringify({ category: 'tops', limit: 10 }),
+    }).then(() => toast('Wardrobe loaded')).catch(() => toast('Wardrobe failed'))
+  }, [])
+  
+  return (
+    <div style={{ 
+      padding: '2rem', 
+      background: 'rgba(10, 14, 23, 0.8)',
+      borderRadius: '12px',
+      marginBottom: '1rem'
+    }}>
+      <h3 style={{ 
+        margin: '0 0 1rem 0', 
+        fontSize: '1.2rem', 
+        background: 'linear-gradient(90deg, #10b981, #059669)',
+        '-webkit-background-clip': 'text', 
+        '-webkit-text-fill-color': 'transparent',
+        borderRadius: '4px'
+      }}>WYA — Wardrobe Intelligence</h3>
+      <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
+        Browse wardrobe items and get AI outfit recommendations.
+      </p>
+      <button
+        onClick={() => {
+          api('/api/wardrobe/browse', {
+            method: 'POST',
+            body: JSON.stringify({ category: 'tops', limit: 10 }),
+          }).then(() => toast('Wardrobe browse completed')).catch(() => toast('Wardrobe browse failed'))
+        }}
+        style={{
+          width: '100%', padding: '0.8rem', background: 'rgba(16, 185, 129, 0.2)',
+          border: '1px solid #22c55e', borderRadius: '8px', color: '#d1d9e1',
+          fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
+        }}>
+        Browse Wardrobe →
+      </button>
+      <br />
+      <br />
+      <Link to="/tryon" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>TryOn →</Link>
+    </div>
+  )
+}
+
+// ─── TryOn Page Component ───
+function TryOnPage() {
+  const navigate = useNavigate()
+  const { show: toast } = useToast()
+  
+  useEffect(() => {
+    api('/api/tryon/generate', {
+      method: 'POST',
+      body: JSON.stringify({ garment_type: 'dress', image_url: '/test.jpg' }),
+    }).then(() => toast('Try-on generated')).catch(() => toast('Try-on failed'))
+  }, [])
+  
+  return (
+    <div style={{ 
+      padding: '2rem', 
+      background: 'rgba(10, 14, 23, 0.8)',
+      borderRadius: '12px',
+      marginBottom: '1rem'
+    }}>
+      <h3 style={{ 
+        margin: '0 0 1rem 0', 
+        fontSize: '1.2rem', 
+        background: 'linear-gradient(90deg, #f59e0b, #d97706)',
+        '-webkit-background-clip': 'text', 
+        '-webkit-text-fill-color': 'transparent',
+        borderRadius: '4px'
+      }}>TryOn — Virtual Fitting Room</h3>
+      <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
+        Generate AI try-on previews for garments.
+      </p>
+      <button
+        onClick={() => {
+          api('/api/tryon/generate', {
+            method: 'POST',
+            body: JSON.stringify({ garment_type: 'dress', image_url: '/test.jpg' }),
+          }).then(() => toast('Try-on generated')).catch(() => toast('Try-on failed'))
+        }}
+        style={{
+          width: '100%', padding: '0.8rem', background: 'rgba(245, 158, 11, 0.2)',
+          border: '1px solid #f59e0b', borderRadius: '8px', color: '#d1d9e1',
+          fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
+        }}>
+        Generate Try-On →
+      </button>
+      <br />
+      <br />
+      <Link to="/jewellery" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Jewellery →</Link>
+    </div>
+  )
+}
+
+// ─── VELARIS Page Component ───
+function VelarisPage() {
+  const navigate = useNavigate()
+  const { show: toast } = useToast()
+  
+  useEffect(() => {
+    api('/api/jewellery/designs', {}).then(() => toast('Designs loaded')).catch(() => toast('Failed to load designs'))
+  }, [])
+  
+  return (
+    <div style={{ 
+      padding: '2rem', 
+      background: 'rgba(10, 14, 23, 0.8)',
+      borderRadius: '12px',
+      marginBottom: '1rem'
+    }}>
+      <h3 style={{ 
+        margin: '0 0 1rem 0', 
+        fontSize: '1.2rem', 
+        background: 'linear-gradient(90deg, #8b5cf6, #7c3aed)',
+        '-webkit-background-clip': 'text', 
+        '-webkit-text-fill-color': 'transparent',
+        borderRadius: '4px'
+      }}>VELARIS — Jewellery Boutique</h3>
+      <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
+        AI-generated jewellery designs and gifting advice.
+      </p>
+      <button
+        onClick={() => {
+          api('/api/jewellery/generate-design', {
+            method: 'POST',
+            body: JSON.stringify({ gemstone: 'diamond', metal: 'gold', occasion: 'gift' }),
+          }).then(() => toast('Design generated')).catch(() => toast('Design generation failed'))
+        }}
+        style={{
+          width: '100%', padding: '0.8rem', background: 'rgba(139, 92, 246, 0.2)',
+          border: '1px solid #a855f7', borderRadius: '8px', color: '#d1d9e1',
+          fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
+        }}>
+        Generate Design →
+      </button>
+      <br />
+      <br />
+      <Link to="/luna" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Luna →</Link>
+    </div>
+  )
+}
+
+// ─── Luna Page Component ───
+function LunaPage() {
+  const navigate = useNavigate()
+  const { show: toast } = useToast()
+  
+  useEffect(() => {
+    api('/api/luna/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: 'I want a summer outfit', token: 'test-token' }),
+    }).then(() => toast('Luna chat loaded')).catch(() => toast('Luna chat failed'))
+  }, [])
+  
+  return (
+    <div style={{ 
+      padding: '2rem', 
+      background: 'rgba(10, 14, 23, 0.8)',
+      borderRadius: '12px',
+      marginBottom: '1rem'
+    }}>
+      <h3 style={{ 
+        margin: '0 0 1rem 0', 
+        fontSize: '1.2rem', 
+        background: 'linear-gradient(180deg, #ec4899, #db2777)',
+        '-webkit-background-clip': 'text', 
+        '-webkit-text-fill-color': 'transparent',
+        borderRadius: '4px'
+      }>luna-stylist — AI Fashion Chatbot</h3>
+      <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
+        Chat with Luna for style advice and outfit suggestions.
+      </p>
+      <div style={{ 
+        margin: '1rem 0', padding: '1rem', background: 'rgba(236, 72, 153, 0.2)',
+        borderRadius: '8px', border: '1px solid #ec4899'
+      }}>
+        <strong style={{ color: '#f472b6', fontSize: '0.9rem' }}>Talk to Luna:</strong>
+        <br />
+        <button
+          onClick={() => {
+            api('/api/luna/chat', {
+              method: 'POST',
+              body: JSON.stringify({ message: 'I need an outfit for a summer wedding', token: 'test-token' }),
+            }).then((data: any) => {
+              const msg = data.reply || 'No reply'
+              toast(`Luna says: ${msg.slice(0, 100)}`)
+            }).catch(() => toast('Luna chat failed'))
+          }}
+          style={{
+            width: '100%', padding: '0.8rem', background: 'rgba(236, 72, 153, 0.2)',
+            border: '1px solid #ec4899', borderRadius: '8px', color: '#d1d9e1',
+            fontWeight: 500, transition: 'all 0.2s', marginTop: '0.5rem'
+          }}>
+          Ask Luna →
+        </button>
+      </div>
+      <br />
+      <br />
+      <Link to="/" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Home →</Link>
+    </div>
+  )
+}
+
+// ─── ORVYNE Frontend Component ───
+export default function App() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { show: toast } = useToast()
+  
+  // Health check on mount
+  useEffect(() => {
+    fetch(`${BASE_URL}/api/health`)
+      .then(res => {
+        if (!res.ok) throw new Error('Backend unavailable')
+      })
+      .catch(() => toast('ORVYNE backend unavailable'))
+  }, [])
+
+  // BATISSE state - track what type of scene we're showing
+  const [batisseSceneType, setBatisseSceneType] = useState<SceneType>(SceneType.PLACEHOLDER)
+  const [batisseLoading, setBatisseLoading] = useState(false)
+  const [batisseError, setBatisseError] = useState<string | null>(null)
+  const [batisseModel, setBatisseModel] = useState<THREE.Group | null>(null)
+  const [batisseRooms, setBatisseRooms] = useState<any[]>([])
+  const [currentRoom, setCurrentRoom] = useState<string | null>(null)
+
+  // Load BATISSE model and room data
+  useEffect(() => {
+    setBatisseLoading(true)
+    
+    // Step 1: Get geometry data
+    api('/api/batisse/projects/1/geometry', {})
+      .then(data => {
+        setBatisseRooms(data.rooms || [])
+        
+        // Determine scene type based on data availability
+        if (data.ready_for_3d && data.geometry) {
+          // Has geometry data - check for GLB export
+          return api('/api/batisse/projects/1/geometry/export-glb', {})
+            .then(glbData => {
+              if (glbData && glbData.success !== false) {
+                // Actual BATISSE GLB - mark scene type and load GLB
+                setBatisseSceneType(SceneType.ACTUAL_BATISSE)
+                // Try to load the actual GLB
+                loadActualBatisseGLB(glbData.glb_base64 || '').then(loadedModel => {
+                  if (loadedModel) {
+                    setBatisseModel(loadedModel)
+                  } else {
+                    // GLB loaded but failed - fall back to geometry-derived
+                    setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                    setBatisseModel(createGeometryDerivedScene(batisseRooms))
+                  }
+                }).catch(() => {
+                  setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                  setBatisseModel(createGeometryDerivedScene(batisseRooms))
+                })
+              } else {
+                // Geometry-derived scene
+                setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+                setBatisseModel(createGeometryDerivedScene(batisseRooms))
+              }
+            })
+            .catch(() => {
+              // GLB export failed - use geometry-derived
+              setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
+              setBatisseModel(createGeometryDerivedScene(batisseRooms))
+            })
+        })
+        .catch(() => {
+          setBatisseError('BATISSE backend unavailable')
+          setBatisseSceneType(SceneType.PLACEHOLDER)
+          setBatisseModel(createPlaceholderScene())
+          setBatisseLoading(false)
+        })
+      })
+      .catch(() => {
+        setBatisseError('BATISSE backend unavailable')
+        setBatisseSceneType(SceneType.PLACEHOLDER)
+        setBatisseModel(createPlaceholderScene())
+        setBatisseLoading(false)
+      })
+  }, [])
+
+  return (
     <BrowserRouter>
       <div style={{ 
         minHeight: '100vh', 
@@ -409,452 +831,21 @@ export default function App() {
             <Route path="/" element={<h2 style={{ textAlign: 'center', margin: '2rem 0' }}>ORVYNE</h2><p style={{ textAlign: 'center', color: '#94a3b8' }}>Select a project from the navigation above.</p>} />
             
             {/* BATISSE — Floor plan → 3D home */}
-            <Route
-              path="/batisse"
-              element={({ route }) => {
-                const navigate = useNavigate()
-                const { show: toast } = useToast()
-                const { loading: loadingBatisse, setLoading: setLoadingBatisse } = useLoadingState(false)
-                
-                useEffect(() => {
-                  // Health check
-                  fetch(`${BASE_URL}/api/health`)
-                    .then(res => {
-                      if (!res.ok) throw new Error('Backend unavailable')
-                    })
-                    .catch(() => toast('ORVYNE backend unavailable'))
-                  
-                  // Load BATISSE model and room data
-                  setBatisseLoading(true)
-                  api('/api/batisse/projects/1/geometry', {})
-                    .then(data => {
-                      setBatisseRooms(data.rooms || [])
-                      
-                      // Determine scene type
-                      if (data.ready_for_3d && data.geometry) {
-                        // Has geometry data - check for GLB export
-                        return api('/api/batisse/projects/1/geometry/export-glb', {})
-                          .then(glbData => {
-                            if (glbData && glbData.success !== false) {
-                              // Actual BATISSE GLB - mark scene type and load GLB
-                              setBatisseSceneType(SceneType.ACTUAL_BATISSE)
-                              // Try to load the actual GLB
-                              loadActualBatisseGLB(glbData.glb_base64 || '').then(loadedModel => {
-                                if (loadedModel) {
-                                  setBatisseModel(loadedModel)
-                                } else {
-                                  // GLB loaded but failed - fall back to geometry-derived
-                                  setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
-                                  setBatisseModel(createGeometryDerivedScene(batisseRooms))
-                                }
-                              }).catch(() => {
-                                setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
-                                setBatisseModel(createGeometryDerivedScene(batisseRooms))
-                              })
-                          })
-                          .catch(() => {
-                            // GLB export failed - use geometry-derived
-                            setBatisseSceneType(SceneType.GEOMETRY_DERIVED)
-                            setBatisseModel(createGeometryDerivedScene(batisseRooms))
-                          })
-                      })
-                      .catch(() => {
-                        setBatisseError('BATISSE backend unavailable')
-                        setBatisseSceneType(SceneType.PLACEHOLDER)
-                        setBatisseModel(createPlaceholderScene())
-                        setBatisseLoading(false)
-                      })
-                  })
-                  .catch(() => {
-                    setBatisseError('BATISSE backend unavailable')
-                    setBatisseSceneType(SceneType.PLACEHOLDER)
-                    setBatisseModel(createPlaceholderScene())
-                    setBatisseLoading(false)
-                  })
-                }, [])
-
-                return (
-                  <div style={{ 
-                    padding: '2rem', 
-                    background: 'rgba(10, 14, 23, 0.8)',
-                    borderRadius: '12px',
-                    marginBottom: '1rem',
-                    overflow: 'hidden'
-                  }}>
-                    <header style={{ 
-                      margin: '-2rem -2rem 1rem -2rem',
-                      padding: '1rem 1.5rem',
-                      background: 'linear-gradient(180deg, #1e293b, #0f172a)',
-                      borderRadius: '12px 12px 0 0',
-                      textAlign: 'center'
-                    }}>
-                      <h3 style={{ 
-                        margin: '0 0 1rem 0', 
-                        fontSize: '1.2rem', 
-                        background: 'linear-gradient(90deg, #3b82f6, #1d4ed8)',
-                        '-webkit-background-clip': 'text', 
-                        '-webkit-text-fill-color': 'transparent',
-                        borderRadius: '4px'
-                      }}>BATISSE — Floor Plan & 3D Home</h3>
-                      <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
-                        Upload a floor plan and view your 3D dollhouse.
-                      </p>
-                      <small style={{ color: '#94a3b8' }}>
-                        {formatNumber(batisseRooms.length)} rooms•{formatNumber(data?.area_sq_m || 0)} sqm{data?.units ? ` (${data.units})` : ''}
-                      </small>
-                    </header>
-                    
-                    <div style={{ 
-                      display: 'flex', 
-                      justifyContent: 'center', 
-                      alignItems: 'center', 
-                      minHeight: '300px',
-                      background: 'rgba(10, 14, 23, 0.8)',
-                      borderRadius: '8px',
-                      marginBottom: '1rem',
-                      position: 'relative'
-                    }}>
-                      {/* Room grid overlay with clickable areas */}
-                      {batisseRooms.length > 0 && (
-                        <div style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          pointerEvents: 'auto'
-                        }}>
-                          {batisseRooms.map((room, idx) => {
-                            const centerAngle = (idx / Math.max(batisseRooms.length, 1)) * Math.PI * 2
-                            const radius = 100
-                            const x = radius * Math.cos(centerAngle)
-                            const y = radius * Math.sin(centerAngle)
-                            
-                            return (
-                              <div
-                                key={room.room_id}
-                                style={{
-                                  position: 'absolute',
-                                  width: 100,
-                                  height: 100,
-                                  left: `${x - 50}px`,
-                                  top: `${y - 50}px`,
-                                  background: 'rgba(59, 130, 246, 0.3)',
-                                  border: '2px solid #3b82f6',
-                                  borderRadius: '4px',
-                                  cursor: 'pointer',
-                                  transition: 'all 0.2s'
-                                }}
-                                onClick={() => handleRoomClick(room.room_id)}
-                                title={`Room ${room.room_id}: ${room.room_name || 'Unnamed'}`}>
-                                <span style={{
-                                  position: 'absolute',
-                                  top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                                  fontSize: '10px', color: '#fff', textAlign: 'center'
-                                }}>{room.room_id?.substring(0, 6)}</span>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                      
-                      {batisseModel ? (
-                        <div id="three-container" style={{ width: 400, height: 400 }} />
-                      ) : (
-                        <p style={{ textAlign: 'center', color: '#64748b', marginTop: '5rem' }}>
-                          {batisseSceneType === SceneType.ACTUAL_BATISSE
-                            ? 'Loading actual BATISSE 3D home...'
-                            : batisseSceneType === SceneType.GEOMETRY_DERIVED
-                              ? 'Deriving home from floor plan geometry...'
-                              : 'Waiting for floor plan...'}
-                        </p>
-                      )}
-                      
-                      {batisseError ? (
-                        <p style={{ color: '#f87171', marginBottom: '1rem', textAlign: 'center' }}>{batisseError}</p>
-                      ) : null}
-                      
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        {batisseError ? (
-                          <p style={{ color: '#f87171', marginBottom: '1rem' }}>{batisseError}</p>
-                        ) : null}
-                        
-                        <div>
-                          <button
-                            onClick={() => {
-                              setBatisseLoading(true)
-                              api('/api/batisse/upload', {
-                                method: 'POST',
-                                body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
-                              }).then(() => {
-                                setBatisseLoading(false)
-                                toast('Floor plan uploaded successfully')
-                              }).catch(() => {
-                                setBatisseLoading(false)
-                                toast('BATISSE upload failed')
-                              })
-                          }}
-                          disabled={batisseLoading}
-                          style={{
-                            width: '100%',
-                            padding: '0.8rem',
-                            background: batisseLoading ? 'rgba(251, 191, 36, 0.2)' : 'rgba(30, 64, 139, 0.8)',
-                            border: '1px solid #64a8d6',
-                            borderRadius: '8px',
-                            color: '#d1d9e1',
-                            fontWeight: 500,
-                            transition: 'all 0.2s',
-                            marginBottom: '0.5rem'
-                          }}>
-                            {batisseLoading ? 'Uploading...' : 'Upload Floor Plan →'}
-                          </button>
-                          <small style={{ color: '#94a3b8', fontSize: '0.8rem' }}>
-                            (requires BATISSE backend)
-                          </small>
-                        </div>
-                        <br />
-                        <small style={{ color: '#94a3b8' }}>
-                          {formatNumber(data?.room_count || 0)} rooms•{formatNumber(data?.area_sq_m || 0)} sqm{data?.units ? ` (${data.units})` : ''}
-                        </small>
-                      </div>
-                    </div>
-                  </div>
-                )
-              }}
-            />
-
+            <Route path="/batisse" element={<BatissePage />} />
+            
             {/* WYA — AI Wardrobe */}
-            <Route
-              path="/wardrobe"
-              element={({ route }) => {
-                const navigate = useNavigate()
-                const { show: toast } = useToast()
-                
-                useEffect(() => {
-                  api('/api/wardrobe/browse', {
-                    method: 'POST',
-                    body: JSON.stringify({ category: 'tops', limit: 10 }),
-                  }).then(() => toast('Wardrobe loaded')).catch(() => toast('Wardrobe failed'))
-                }, [])
-                
-                return (
-                  <div style={{ 
-                    padding: '2rem', 
-                    background: 'rgba(10, 14, 23, 0.8)',
-                    borderRadius: '12px',
-                    marginBottom: '1rem'
-                  }}>
-                    <h3 style={{ 
-                      margin: '0 0 1rem 0', 
-                      fontSize: '1.2rem', 
-                      background: 'linear-gradient(90deg, #10b981, #059669)',
-                      '-webkit-background-clip': 'text', 
-                      '-webkit-text-fill-color': 'transparent',
-                      borderRadius: '4px'
-                    }}>WYA — Wardrobe Intelligence</h3>
-                    <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
-                      Browse wardrobe items and get AI outfit recommendations.
-                    </p>
-                    <button
-                      onClick={() => {
-                        api('/api/wardrobe/browse', {
-                          method: 'POST',
-                          body: JSON.stringify({ category: 'tops', limit: 10 }),
-                        }).then(() => toast('Wardrobe browse completed')).catch(() => toast('Wardrobe browse failed'))
-                      }}
-                      style={{
-                        width: '100%', padding: '0.8rem', background: 'rgba(16, 185, 129, 0.2)',
-                        border: '1px solid #22c55e', borderRadius: '8px', color: '#d1d9e1',
-                        fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
-                      }}>
-                        Browse Wardrobe →
-                      </button>
-                    <br />
-                    <br />
-                    <Link to="/tryon" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>TryOn →</Link>
-                  </div>
-                )
-              }}
-            />
-
+            <Route path="/wardrobe" element={<WyaPage />} />
+            
             {/* TryOn — Virtual Fitting Room */}
-            <Route
-              path="/tryon"
-              element={({ route }) => {
-                const navigate = useNavigate()
-                const { show: toast } = useToast()
-                
-                useEffect(() => {
-                  api('/api/tryon/generate', {
-                    method: 'POST',
-                    body: JSON.stringify({ garment_type: 'dress', image_url: '/test.jpg' }),
-                  }).then(() => toast('Try-on generated')).catch(() => toast('Try-on failed'))
-                }, [])
-                
-                return (
-                  <div style={{ 
-                    padding: '2rem', 
-                    background: 'rgba(10, 14, 23, 0.8)',
-                    borderRadius: '12px',
-                    marginBottom: '1rem'
-                  }}>
-                    <h3 style={{ 
-                      margin: '0 0 1rem 0', 
-                      fontSize: '1.2rem', 
-                      background: 'linear-gradient(90deg, #f59e0b, #d97706)',
-                      '-webkit-background-clip': 'text', 
-                      '-webkit-text-fill-color': 'transparent',
-                      borderRadius: '4px'
-                    }}>TryOn — Virtual Fitting Room</h3>
-                    <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
-                      Generate AI try-on previews for garments.
-                    </p>
-                    <button
-                      onClick={() => {
-                        api('/api/tryon/generate', {
-                          method: 'POST',
-                          body: JSON.stringify({ garment_type: 'dress', image_url: '/test.jpg' }),
-                        }).then(() => toast('Try-on generated')).catch(() => toast('Try-on failed'))
-                      }}
-                      style={{
-                        width: '100%', padding: '0.8rem', background: 'rgba(245, 158, 11, 0.2)',
-                        border: '1px solid #f59e0b', borderRadius: '8px', color: '#d1d9e1',
-                        fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
-                      }}>
-                        Generate Try-On →
-                      </button>
-                    <br />
-                    <br />
-                    <Link to="/jewellery" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Jewellery →</Link>
-                  </div>
-                )
-              }}
-            />
-
+            <Route path="/tryon" element={<TryOnPage />} />
+            
             {/* VELARIS — Jewellery Boutique */}
-            <Route
-              path="/jewellery"
-              element={({ route }) => {
-                const navigate = useNavigate()
-                const { show: toast } = useToast()
-                
-                useEffect(() => {
-                  api('/api/jewellery/designs', {}).then(() => toast('Designs loaded')).catch(() => toast('Failed to load designs'))
-                }, [])
-                
-                return (
-                  <div style={{ 
-                    padding: '2rem', 
-                    background: 'rgba(10, 14, 23, 0.8)',
-                    borderRadius: '12px',
-                    marginBottom: '1rem'
-                  }}>
-                    <h3 style={{ 
-                      margin: '0 0 1rem 0', 
-                      fontSize: '1.2rem', 
-                      background: 'linear-gradient(90deg, #8b5cf6, #7c3aed)',
-                      '-webkit-background-clip': 'text', 
-                      '-webkit-text-fill-color': 'transparent',
-                      borderRadius: '4px'
-                    }}>VELARIS — Jewellery Boutique</h3>
-                    <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
-                      AI-generated jewellery designs and gifting advice.
-                    </p>
-                    <button
-                      onClick={() => {
-                        api('/api/jewellery/generate-design', {
-                          method: 'POST',
-                          body: JSON.stringify({ gemstone: 'diamond', metal: 'gold', occasion: 'gift' }),
-                        }).then(() => toast('Design generated')).catch(() => toast('Design generation failed'))
-                      }}
-                      style={{
-                        width: '100%', padding: '0.8rem', background: 'rgba(139, 92, 246, 0.2)',
-                        border: '1px solid #a855f7', borderRadius: '8px', color: '#d1d9e1',
-                        fontWeight: 500, transition: 'all 0.2s', marginTop: '1rem'
-                      }}>
-                        Generate Design →
-                      </button>
-                    <br />
-                    <br />
-                    <Link to="/luna" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Luna →</Link>
-                  </div>
-                )
-              }}
-            />
-
+            <Route path="/jewellery" element={<VelarisPage />} />
+            
             {/* luna-stylist — AI Fashion Chatbot */}
-            <Route
-              path="/luna"
-              element={({ route }) => {
-                const navigate = useNavigate()
-                const { show: toast } = useToast()
-                
-                useEffect(() => {
-                  api('/api/luna/chat', {
-                    method: 'POST',
-                    body: JSON.stringify({ message: 'I want a summer outfit', token: 'test-token' }),
-                  }).then(() => toast('Luna chat loaded')).catch(() => toast('Luna chat failed'))
-                }, [])
-                
-                return (
-                  <div style={{ 
-                    padding: '2rem', 
-                    background: 'rgba(10, 14, 23, 0.8)',
-                    borderRadius: '12px',
-                    marginBottom: '1rem'
-                  }}>
-                    <h3 style={{ 
-                      margin: '0 0 1rem 0', 
-                      fontSize: '1.2rem', 
-                      background: 'linear-gradient(180deg, #ec4899, #db2777)',
-                      '-webkit-background-clip': 'text', 
-                      '-webkit-text-fill-color': 'transparent',
-                      borderRadius: '4px'
-                    }>luna-stylist — AI Fashion Chatbot</h3>
-                    <p style={{ margin: '0.5rem 0 1rem 0', opacity: '0.8' }}>
-                      Chat with Luna for style advice and outfit suggestions.
-                    </p>
-                    <div style={{ 
-                      margin: '1rem 0', padding: '1rem', background: 'rgba(236, 72, 153, 0.2)',
-                      borderRadius: '8px', border: '1px solid #ec4899'
-                    }}>
-                      <strong style={{ color: '#f472b6', fontSize: '0.9rem' }}>Talk to Luna:</strong>
-                      <br />
-                      <button
-                        onClick={() => {
-                          api('/api/luna/chat', {
-                            method: 'POST',
-                            body: JSON.stringify({ message: 'I need an outfit for a summer wedding', token: 'test-token' }),
-                          }).then((data: any) => {
-                            const msg = data.reply || 'No reply'
-                            toast(`Luna says: ${msg.slice(0, 100)}`)
-                          }).catch(() => toast('Luna chat failed'))
-                        }}
-                        style={{
-                          width: '100%', padding: '0.8rem', background: 'rgba(236, 72, 153, 0.2)',
-                          border: '1px solid #ec4899', borderRadius: '8px', color: '#d1d9e1',
-                          fontWeight: 500, transition: 'all 0.2s', marginTop: '0.5rem'
-                        }}>
-                          Ask Luna →
-                        </button>
-                    </div>
-                    <br />
-                    <br />
-                    <Link to="/" style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Home →</Link>
-                  </div>
-                )
-              }}
-            />
+            <Route path="/luna" element={<LunaPage />} />
           </Routes>
         </div>
-
-        <footer style={{
-          textAlign: 'center', padding: '1rem 0', marginTop: '2rem',
-          background: 'rgba(0, 0, 0, 0.3)', borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-          fontSize: '0.75rem', color: '#64748b'
-        }}>
-          ORVYNE • Personal Virtual Home & Lifestyle Universe
-        </footer>
       </div>
     </BrowserRouter>
   )

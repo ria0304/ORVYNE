@@ -17,7 +17,7 @@ from ..schemas import (
 )
 
 # BATISSE backend base URL
-BATISSE_BASE = "http://127.0.0.1:8000"  # configured via config.BATISSE_BASE_URL in production
+from ..config import BATISSE_BASE_URL as BATISSE_BASE  # configured via config.BATISSE_BASE_URL in production
 
 
 class BatisseService:

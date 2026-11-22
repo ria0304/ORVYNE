@@ -19,7 +19,7 @@ from ..schemas import (
 )
 
 # WYA backend base URL
-WYA_BASE = "http://127.0.0.1:8000"  # configured via config.WYA_BASE_URL in production
+from ..config import WYA_BASE_URL as WYA_BASE  # configured via config.WYA_BASE_URL in production
 
 
 class WYAService:

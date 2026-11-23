@@ -410,60 +410,8 @@ function BatissePage({ toast }: { toast: Notify }) {
   const [loading, setLoading] = useState(true)
   const [currentRoom, setCurrentRoom] = useState<string | null>(null)
   const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'error'>('none')
-
-
-  // API: Create new room
-  const createRoom = async (roomType: string) => {
-    const response = await api('/api/batisse/rooms', {
-      method: 'POST',
-      body: JSON.stringify({ type: roomType, name: roomType }),
-    })
-    if (response.success) {
-      setRooms(prev => [...prev, { room_id: response.room_id, room_name: roomType }])
-      setNewRoomType('living')
-      toast(\`Room added: \${roomType}\`)
-    }
-  }
-
-  // API: Delete room
-  const deleteRoom = async (roomId: string) => {
-    const response = await api(`/api/batisse/rooms/${roomId}`, {
-      method: 'DELETE',
-    })
-    if (response.success) {
-      setRooms(prev => prev.filter(r => r.room_id !== roomId))
-      setSelectedRoom(null)
-      setRoomEditMode(false)
-      toast('Room deleted')
-    }
-  }
-
-  // API: Update room dimensions
-  const updateRoomDimensions = async (roomId: string, dimensions: { width: number; depth: number; height: number }) => {
-    const response = await api(`/api/batisse/rooms/${roomId}/dimensions`, {
-      method: 'PUT',
-      body: JSON.stringify(dimensions),
-    })
-    if (response.success) {
-      toast('Room dimensions updated')
-    }
-  }
-
-  // API: Connect rooms with door
-  const connectRooms = async (fromRoom: string, toRoom: string, doorSide: 'front' | 'back' | 'left' | 'right') => {
-    const response = await api('/api/batisse/rooms/connect', {
-      method: 'POST',
-      body: JSON.stringify({ from_room: fromRoom, to_room: toRoom, door_side: doorSide }),
-    })
-    if (response.success) {
-      toast(\`Rooms connected via \${doorSide} door\`)
-    }
-  }
-
+  const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'error'>('none')
   const [roomFurniture, setRoomFurniture] = useState<any[]>([])
-  const [selectedRoom, setSelectedRoom] = useState<string | null>(null)
-  const [roomEditMode, setRoomEditMode] = useState(false)
-  const [newRoomType, setNewRoomType] = useState<'living' | 'bedroom' | 'kitchen' | 'bathroom' | 'wardrobe' | 'jewellery'>('living')
   const [homeGeometry, setHomeGeometry] = useState<any | null>(null)
   const [spawnPoint, setSpawnPoint] = React.useState(new THREE.Vector3(0, 1.6, 0))
 
@@ -505,38 +453,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
   }, [])
 
   // Personalised home generation
-  // Save furniture positions to localStorage
   React.useEffect(() => {
-    const saveFurniture = () => {
-      const furnitureData = roomFurniture.map(f => ({
-        type: f.type,
-        position: { x: f.mesh.position.x, y: f.mesh.position.y, z: f.mesh.position.z },
-        rotation: f.mesh.rotation.z,
-      }))
-      localStorage.setItem('orvyneFurniture', JSON.stringify(furnitureData))
-    }
-    saveFurniture()
-    const interval = setInterval(saveFurniture, 30000)
-    return () => clearInterval(interval)
-  }, [roomFurniture])
-
-  // Restore furniture positions from localStorage on startup
-  React.useEffect(() => {
-    const restored = JSON.parse(localStorage.getItem('orvyneFurniture') || '[]')
-    if (restored.length > 0) {
-      const restoredFurniture = restored.map((f: any) => {
-        const existing = roomFurniture.find(rf => rf.type === f.type)
-        if (existing) {
-          existing.mesh.position.set(f.position.x, f.position.y, f.position.z)
-          existing.mesh.rotation.set(0, 0, f.rotation)
-          return existing
-        }
-        return null
-      }).filter(Boolean)
-      setRoomFurniture(restoredFurniture)
-    }
-  }, [])
-
     let cancelled = false
     ;(async () => {
       try {
@@ -565,13 +482,6 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
         }
         // Geometry-derived fallback
         setHomeGeometry(createGeometryDerivedScene(roomList))
-        
-        // Convert roomList to rooms state for expansion features
-        const roomMap: any[] = []
-        roomList.forEach((room: any) => {
-          roomMap.push({ room_id: String(room.room_id ?? 0), room_name: (room.room_name ?? '').toLowerCase() || 'Room' })
-        })
-        setRooms(roomMap)
         setHomeConfig('generated')
 // Set room furniture based on room type
         const roomFurniture: any[] = []
@@ -741,56 +651,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
     mount.addEventListener('mousemove', mouseMove)
     return () => mount.removeEventListener('mousemove', mouseMove)
   }, [playerPerspective])
-  // Furniture interaction
-  const handleFurnitureClick = (furnType: string) => {
-    setSelectedFurniture(prev => prev === furnType ? null : furnType)
-    setIsPlacing(furnType === 'lamp' || furnType === 'table')
-    setIsRotating(furnType === 'lamp' || furnType === 'table')
-  }
 
-  const handleFurnitureDrag = (e: MouseEvent) => {
-    if (!selectedFurniture || !isPlacing) return
-    const mount = document.getElementById('three-viewer')
-    if (!mount) return
-    const rect = mount.getBoundingClientRect()
-    const x = (e.clientX - rect.left) / mount.clientWidth * 2 - 1
-    const y = -(e.clientY - rect.top) / mount.clientHeight * 2 + 1
-    const raycaster = new THREE.Raycaster()
-    raycaster.setFromCamera(new THREE.Vector2(x, y), camera)
-    const intersects = raycaster.intersectObjects(roomFurniture.map(f => f.mesh).filter(m => m), true)
-    if (intersects.length > 0) {
-      const intersect = intersects[0]
-      setPlacePosition(new THREE.Vector3(intersect.point.x, intersect.point.y, intersect.point.z))
-      // Snap to grid (half-unit increments)
-      setPlacePosition(new THREE.Vector3(
-        Math.round(intersect.point.x * 2) / 2,
-        Math.round(intersect.point.y * 2) / 2,
-        Math.round(intersect.point.z * 2) / 2
-      ))
-    }
-  }
-
-  const handleFurnitureRotate = () => {
-    if (!selectedFurniture || !isRotating) return
-    setPlaceRotation((placeRotation + Math.PI / 2) % (Math.PI * 2))
-  }
-
-  mount.addEventListener('click', (event) => {
-    const mouse = new THREE.Vector2()
-    mouse.x = (event.clientX / mount.clientWidth) * 2 - 1
-    mouse.y = -(event.clientY / mount.clientHeight) * 2 + 1
-    const raycaster = new THREE.Raycaster()
-    raycaster.setFromCamera(mouse, camera)
-    const intersects = raycaster.intersectObjects(roomFurniture.map(f => f.mesh), true)
-    if (intersects.length > 0) {
-      const clickedFurniture = roomFurniture.find(f => f.mesh === intersects[0].object)
-      if (clickedFurniture) {
-        handleFurnitureClick(clickedFurniture.type)
-      }
-    }
-  })
-
-  // Player movement and physics
   // Player movement and physics
   React.useEffect(() => {
     const speed = isSprinting ? 7 : isCrouching ? 2 : 4
@@ -937,6 +798,30 @@ function ExteriorEnvironment() {
     ground.position.y = 0
     sky.current.add(ground)
 
+    // Create moon group
+    const moonGroup = new THREE.Group()
+    moonGroup.name = 'moon-group'
+    
+    // Moon sphere
+    const moonGeometry = new THREE.SphereGeometry(2, 16, 16)
+    const moonMaterial = new THREE.MeshStandardMaterial({ color: 0xf0f0f0 })
+    const moonMesh = new THREE.Mesh(moonGeometry, moonMaterial)
+    moonMesh.position.set(80, 50, 80)
+    moonMesh.rotation.x = -Math.PI / 2
+    moonGroup.add(moonMesh)
+    
+    // Moon glow
+    const moonGlowGeometry = new THREE.SphereGeometry(2.2, 16, 16)
+    const moonGlowMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0xf0f0f0, 
+      opacity: 0.6, 
+      transparent: true 
+    })
+    const moonGlow = new THREE.Mesh(moonGlowGeometry, moonGlowMaterial)
+    moonGroup.add(moonGlow)
+    
+    sky.current.add(moonGroup)
+
     return scene => {
       if (scene.getObjectByName('exterior-environment')) {
         scene.remove(scene.getObjectByName('exterior-environment'))
@@ -944,6 +829,191 @@ function ExteriorEnvironment() {
     }
   }, [])
 
+  // Time progression state - day/night cycle
+  const [timeOfDay, setTimeOfDay] = React.useState(0) // 0-1, 0 = midnight, 0.5 = noon, 1 = sunset
+  const [weather, setWeather] = React.useState<'clear' | 'rain' | 'cloudy'>('clear')
+  const [rainAccumulator, setRainAccumulator] = React.useState(0)
+  
+  // Time progression effect - complete day/night cycle over 20 seconds
+  React.useEffect(() => {
+    let animationId = 0
+    const startTime = performance.now()
+    
+    const animateTime = () => {
+      const elapsed = performance.now() - startTime
+      // Complete cycle every 20 seconds, going from 0 to 1 and back
+      const cycle = (elapsed % 40000) / 20000
+      if (cycle > 1) {
+        setTimeOfDay(2 - cycle)
+      } else {
+        setTimeOfDay(cycle)
+      }
+      animationId = requestAnimationFrame(animateTime)
+    }
+    
+    animationId = requestAnimationFrame(animateTime)
+    return () => cancelAnimationFrame(animationId)
+  }, [])
+  
+  // Weather effect - rain simulation
+  React.useEffect(() => {
+    let rainParticleCount = 0
+    let rainInterval = 0
+    
+    const initRain = () => {
+      if (weather !== 'rain') {
+        // Clear existing rain
+        if (rainInterval) {
+          clearInterval(rainInterval)
+          rainInterval = 0
+        }
+        rainParticleCount = 0
+        return
+      }
+      
+      if (rainParticleCount === 0) {
+        // Create rain particles
+        const rainGroup = new THREE.Group()
+        rainGroup.name = 'rain-group'
+        
+        for (let i = 0; i < 200; i++) {
+          const particle = new THREE.Mesh(
+            new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(
+                Math.random() * 100 - 50,
+                Math.random() * 100,
+                Math.random() * 100
+              )
+            ]),
+            new THREE.MeshBasicMaterial({ 
+              color: 0x88c0d0, 
+              size: 0.1 + Math.random() * 0.2 
+            })
+          )
+          particle.position.set(
+            Math.random() * 100 - 50,
+            Math.random() * 200,
+            Math.random() * 100 - 50
+          )
+          particle.userData.speed = 0.5 + Math.random() * 0.5
+          particle.userData.length = 20 + Math.random() * 30
+          rainGroup.add(particle)
+        }
+        
+        // Add rain group to sky
+        if (sky.current) {
+          sky.current.add(rainGroup)
+        }
+        rainParticleCount = 200
+      }
+    }
+    
+    initRain()
+    
+    // Rain animation
+    if (weather === 'rain') {
+      rainInterval = setInterval(() => {
+        if (!sky.current || rainParticleCount === 0) return
+        
+        const particles = sky.current.getObjectByName('rain-group')
+        if (!particles) return
+        
+        particles.traverse((object: any) => {
+          if (object.isMesh && object.userData.speed) {
+            object.position.y -= object.userData.speed
+            if (object.position.y < 0) {
+              object.position.y = 200 + Math.random() * 50
+              object.position.x = Math.random() * 100 - 50
+              object.position.z = Math.random() * 100 - 50
+            }
+          }
+        })
+      }, 16)
+    }
+    
+    return () => {
+      if (rainInterval) clearInterval(rainInterval)
+      if (sky.current) {
+        const rainGroup = sky.current.getObjectByName('rain-group')
+        if (rainGroup) sky.current.remove(rainGroup)
+      }
+    }
+  }, [weather])
+  
+  // Interior lighting based on time of day
+  React.useEffect(() => {
+    const updateInteriorLighting = () => {
+      if (!sky.current) return
+      
+      // Find or create interior light group
+      let interiorGroup = sky.current.getObjectByName('interior-lighting')
+      if (!interiorGroup) {
+        interiorGroup = new THREE.Group()
+        interiorGroup.name = 'interior-lighting'
+        sky.current.add(interiorGroup)
+      }
+      
+      // Adjust based on time of day
+      // 0 = midnight (dark), 0.5 = noon (bright), 1 = sunset (golden)
+      const t = timeOfDay
+      
+      // Sunset/sunrise golden hour effect
+      const goldenHour = Math.sin(t * Math.PI * 2) > 0 ? Math.sin(t * Math.PI * 2) : 0
+      const ambientIntensity = 0.3 + goldenHour * 0.4
+      const sunIntensity = 1.0 + goldenHour * 0.5
+      
+      // Update ambient light
+      const ambientLight = sky.current.getObjectByName('ambient-light')
+      if (ambientLight) {
+        ambientLight.intensity = ambientIntensity
+      }
+      
+      // Update sun direction based on time
+      const sunLight = sky.current.getObjectByName('sun-light')
+      if (sunLight) {
+        // Sun rises in east, sets in west (negative z direction)
+        const angle = (t - 0.5) * Math.PI // -PI/2 to PI/2
+        sunLight.position.set(Math.cos(angle) * 50, 50, Math.sin(angle) * 50)
+        sunLight.intensity = sunIntensity
+      }
+      
+      // Moon direction (opposite of sun)
+      const moonLight = sky.current.getObjectByName('moon-light')
+      if (moonLight) {
+        const moonAngle = (t - 0.5) * Math.PI + Math.PI // opposite of sun
+        moonLight.position.set(Math.cos(moonAngle) * 50, 50, Math.sin(moonAngle) * 50)
+        moonLight.intensity = 0.5 * (1 - goldenHour)
+      }
+    }
+    
+    updateInteriorLighting()
+  }, [timeOfDay])
+  
+  // Luna's time-aware behaviour
+  React.useEffect(() => {
+    const expressions = ['idle', 'sleepy', 'happy', 'thinking']
+    
+    const updateLunaExpression = () => {
+      const hour = timeOfDay * 24
+      
+      if (hour >= 21 || hour < 6) {
+        // Night time - sleepy
+        setLunaExpression('sleepy')
+      } else if (hour >= 6 && hour < 12) {
+        // Morning - happy
+        setLunaExpression('happy')
+      } else if (hour >= 12 && hour < 18) {
+        // Afternoon - thinking
+        setLunaExpression('thinking')
+      } else {
+        // Evening - idle
+        setLunaExpression('idle')
+      }
+    }
+    
+    updateLunaExpression()
+  }, [timeOfDay, lunaState])
+  
   // Add to scene when model is available
   React.useEffect(() => {
     const mount = document.getElementById('three-viewer')

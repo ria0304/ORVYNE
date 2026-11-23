@@ -15,7 +15,7 @@ from typing import Any, Dict
 from httpx import AsyncClient
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
@@ -518,6 +518,57 @@ async def luna_chat(message: str, token: str, wardrobe_items: dict | None = None
             return {"reply": data.get("reply", ""), "intent": data.get("intent", ""), "data": data.get("data")}
         except Exception as e:
             return {"reply": f"Luna backend unavailable: {str(e)[:100]}", "intent": "error", "data": None}
+
+# ── Luna state ───────────────────────────────────────────────────────────
+@app.get("/api/luna/state/get_state", tags=["luna"], summary="Get Luna state")
+async def luna_get_state() -> Dict[str, Any]:
+    """Get current Luna companion state from database."""
+    db = get_db_session()
+    try:
+        state = db.query(LunaState).filter_by(user_id=USER_ID).first()
+        if state:
+            return {
+                "state": state.current_expression,
+                "is_following": state.is_following,
+                "following_offset": state.following_offset,
+                "dismissible": state.dismissible,
+                "last_seen": state.last_seen,
+            }
+        return {"state": "idle", "is_following": True, "following_offset": {"x": 0, "y": 0, "z": 0}, "dismissible": True, "last_seen": None}
+    finally:
+        db.close()
+
+@app.post("/api/luna/state/toggle_following", tags=["luna"], summary="Toggle Luna following")
+async def luna_toggle_following() -> Dict[str, Any]:
+    """Toggle Luna following preference."""
+    db = get_db_session()
+    try:
+        state = db.query(LunaState).filter_by(user_id=USER_ID).first()
+        if state:
+            state.is_following = not state.is_following
+        else:
+            state = LunaState(user_id=USER_ID, is_following=True)
+            db.add(state)
+        db.commit()
+        return {"is_following": state.is_following}
+    finally:
+        db.close()
+
+@app.post("/api/luna/state/set_expression", tags=["luna"], summary="Set Luna expression")
+async def luna_set_expression(expression: str = Form(...)) -> Dict[str, Any]:
+    """Set Luna's current expression."""
+    db = get_db_session()
+    try:
+        state = db.query(LunaState).filter_by(user_id=USER_ID).first()
+        if not state:
+            state = LunaState(user_id=USER_ID)
+            db.add(state)
+        state.current_expression = expression
+        state.last_seen = func.now()
+        db.commit()
+        return {"expression": state.current_expression}
+    finally:
+        db.close()
 
 
 # ── Cross-project integration endpoints ────────────────────────────────────────

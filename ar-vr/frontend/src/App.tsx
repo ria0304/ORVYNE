@@ -686,7 +686,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
       </small>
       <div style={{ margin: '1rem 0' }}>
         {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} roomFurniture={roomFurniture} />}
-        <LunaCompanion
+<LunaCompanion
           playerPos={playerPos}
           playerPerspective={playerPerspective}
           lunaState={lunaState}
@@ -695,7 +695,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
           setLunaExpression={setLunaExpression}
           currentRoom={currentRoom}
         />
-        <ExteriorEnvironment />
+        <InventoryPanel inventory={inventory} setInventory={setInventory} />
       </div>
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
       {rooms.length > 0 && (
@@ -764,6 +764,24 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     }
   }, [lunaState])
 
+  // Luna physical animation state
+  const animationState = React.useState<'idle' | 'walking' | 'turning'>('idle')[0]
+
+  // Update animation state based on player movement
+  React.useEffect(() => {
+    let lastPos = lunaPosition.current
+    const checkMovement = setInterval(() => {
+      const dist = Math.abs(lunaPosition.current.x - lastPos.x) + Math.abs(lunaPosition.current.z - lastPos.z)
+      if (dist > 0.1) {
+        animationState.value = 'walking'
+      } else {
+        animationState.value = 'idle'
+      }
+      lastPos = lunaPosition.current
+    }, 100)
+    return () => clearInterval(checkMovement)
+  }, [lunaPosition])
+
   // Room-aware greetings and assistance
   const getRoomGreeting = (roomName: string | null): string => {
     if (!roomName) return ''
@@ -772,21 +790,24 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
       return 'Welcome home! Would you like to explore or relax?'
     }
     if (lowerName.includes('bedroom') || lowerName.includes('bed')) {
-      return 'Good night! Sleep well.'
+      return 'Good night! Sleep well. Luna will keep watch.'
     }
     if (lowerName.includes('kitchen') || lowerName.includes('cook')) {
-      return 'Would you like a snack?'
+      return 'Would you like a snack? Luna can help with wardrobe suggestions.'
     }
     if (lowerName.includes('bathroom') || lowerName.includes('bath')) {
-      return 'The bathroom is ready.'
+      return 'The bathroom is ready. Luna is available outside.'
     }
     if (lowerName.includes('wardrobe') || lowerName.includes('closet')) {
-      return 'The wardrobe is available.'
+      return 'The wardrobe is available. I can help with outfit suggestions using WYA.'
     }
     if (lowerName.includes('jewellery') || lowerName.includes('studio')) {
-      return 'Would you like to design jewellery?'
+      return 'Would you like to design jewellery using VELARIS? I can assist with the process.'
     }
-    return `You are in the ${roomName}.`
+    if (lowerName.includes('fitting')) {
+      return 'The fitting studio is open. I can explain how TryOn works and help you select garments.'
+    }
+    return `You are in the ${roomName}. Luna is here to assist.`
   }
 
   // Display greeting when entering a room
@@ -814,6 +835,18 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     }, 3000)
     return () => clearInterval(interval)
   }, [lunaState])
+
+  // Interaction: L key to call or interact with Luna
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'KeyL') {
+        toggleLunaFollowing()
+        setLunaExpression('happy')
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [currentRoom])
 
   // Luna 3D model
   const lunaMesh = React.useRef<THREE.Mesh | null>(null)
@@ -1149,7 +1182,7 @@ const navItems = [
 // ─── HUD ───
 function useHUD() {
   const [selectedSlot, setSelectedSlot] = React.useState(0)
-  const [inventory, setInventory] = React.useState<Array<number | null>>(Array(9).fill(null))
+  const [inventory, setInventory] = React.useState<Array<string | null>>(Array(9).fill(null))
   const [isPaused, setIsPaused] = React.useState(false)
 
   // Hotbar selection
@@ -1206,6 +1239,90 @@ function Hotbar({ selectedSlot: slot, inventory, setInventory }: { selectedSlot:
           {item !== null ? item : '▢'}
         </div>
       ))}
+    </div>
+  )
+}
+
+// ─── Inventory System ───
+function InventoryPanel({ inventory, setInventory }: { inventory: Array<string | null>; setInventory: React.Dispatch<React.SetStateAction<Array<string | null>>> }) {
+  const [isOpen, setIsOpen] = React.useState(false)
+
+  const toggleInventory = () => setIsOpen(!isOpen)
+
+  const handleSlotSelect = (index: number) => {
+    setInventory(prev => {
+      const newInv = [...prev]
+      newInv[index] = newInv[index] === null ? 'selected' : null
+      return newInv
+    })
+  }
+
+  const inventoryItems: Array<{ name: string; description: string; category: string }> = [
+    { name: 'Wardrobe Access', description: 'Open wardrobe for outfit browsing', category: 'ORVYNE' },
+    { name: 'TryOn Kit', description: 'Virtual fitting room tools', category: 'ORVYNE' },
+    { name: 'Jewellery Design', description: 'VELARIS design tools', category: 'ORVYNE' },
+    { name: 'Home Settings', description: 'Personalised home configuration', category: 'ORVYNE' },
+    { name: 'Luna Preferences', description: 'Companion settings and state', category: 'ORVYNE' },
+    { name: 'Saved Designs', description: 'Stored jewellery designs', category: 'ORVYNE' },
+    { name: 'TryOn Results', description: 'Saved try-on generation results', category: 'ORVYNE' },
+    { name: 'Wardrobe Items', description: 'Browsed outfit items', category: 'ORVYNE' },
+    { name: 'Inventory Empty', description: 'Empty slot', category: 'ORVYNE' },
+  ]
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: 50,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: 'rgba(15, 23, 42, 0.9)',
+        border: '2px solid #3b82f6',
+        borderRadius: 12,
+        padding: '1rem',
+        width: 250,
+        maxHeight: 'calc(100vh - 100px)',
+        overflowY: 'auto',
+        zIndex: 20,
+        color: '#e0e7ff',
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <span>Inventory</span>
+        <button onClick={toggleInventory} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '0.75rem' }}>
+          ✕
+        </button>
+      </div>
+      <div style={{ height: 'calc(100% - 1.5rem)', display: 'flex', flexDirection: 'column', gap: 0.5rem }}>
+        {inventoryItems.map((item, i) => {
+          const isSelected = inventory[i] !== null
+          const style = {
+            background: isSelected ? 'rgba(59, 130, 246, 0.2)' : 'rgba(15, 23, 42, 0.8)',
+            border: '1px solid #3b3d4e',
+            borderRadius: 6,
+            padding: '0.5rem',
+            cursor: 'pointer',
+            transition: 'background 0.2s',
+          }
+          const itemStyle = isSelected ? { color: '#e0e7ff' } : { color: '#94a3b8' }
+          return (
+            <div
+              key={i}
+              style={style}
+              onClick={() => handleSlotSelect(i)}
+            >
+              <div style={{ fontWeight: 500, marginBottom: 0.25rem }>{item.name}</div>
+              <div style={{ fontSize: '0.65rem', opacity: 0.8 }>{item.description}</div>
+            </div>
+          )
+        })}
+        {inventory.length < inventoryItems.length && (
+          <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', opacity: 0.5, color: '#475467' }}>
+            {inventory.length} of {inventoryItems.length} items
+          </div>
+        )}
+      </div>
     </div>
   )
 }

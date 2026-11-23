@@ -30,6 +30,25 @@ function useToast() {
   }, [])
   return { message, show }
 }
+// WYA Wardrobe browsing
+  const browseWyaWardrobe = async () => {
+    try {
+      const wardrobe = await api("/api/wardrobe/browse", { method: "POST", body: JSON.stringify({ user_id: USER_ID }) })
+      if (wardrobe.items && wardrobe.items.length > 0) {
+        const itemsText = wardrobe.items
+          .slice(0, 5)
+          .map((item: any) => item.item_name ?? item.name ?? "Item")
+          .join(", ")
+        toast(`Wardrobe loaded with: ${itemsText}`)
+      } else {
+        toast("Wardrobe loaded")
+      }
+    } catch (error) {
+      toast("Failed to load wardrobe")
+      console.error("WARDROBE ERROR:", error)
+    }
+  }
+
 
 // ─── Scene types ───
 enum SceneType {
@@ -94,6 +113,46 @@ const keyup = (e: KeyboardEvent) => {
       // Door interaction: E key release
       if (e.code === 'KeyE' && currentRoom) {
         handleDoorInteraction(currentRoom, 'front')
+      }
+      // Furniture interaction: E key release when not in a room
+      if (e.code === 'KeyE' && !currentRoom && roomFurniture.length > 0) {
+        const playerCenter = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z)
+        const nearestFurniture = roomFurniture.reduce((nearest, furn) => {
+          const furnCenter = furn.mesh.position.clone()
+          const distance = playerCenter.distanceTo(furnCenter)
+          return distance < (nearest ? nearest.distance : Infinity) ? { mesh: furn.mesh, distance: distance, type: furn.type } : nearest
+        }, null)
+        if (nearestFurniture) {
+          switch (nearestFurniture.type) {
+            case 'sofa':
+              toast('Press E to sit')
+              break
+            case 'bed':
+              toast('Press E to rest')
+              break
+            case 'wardrobe':
+              // Open WYA wardrobe browsing
+              toast('Opening wardrobe...')
+              browseWyaWardrobe()
+              break
+            case 'counter':
+              toast('Press E to interact')
+              break
+            case 'display case':
+              toast('Press E to open jewellery studio')
+              break
+            case 'jewellery-studio':
+              toast('Opening jewellery studio...')
+              generateJewelleryDesign()
+              break
+            case 'fitting-room':
+              toast('Opening fitting studio...')
+              tryOnGarment()
+              break
+            default:
+              toast('Interact with object')
+          }
+        }
       }
     }
     window.addEventListener('keydown', keydown)
@@ -199,7 +258,7 @@ async function loadActualBatisseGLB(glbBase64: string): Promise<THREE.Group | nu
 }
 
 // ─── Three.js viewer ───
-function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
+function ThreeViewer({ model, meshUrl }: { model: THREE.Object3D | null; meshUrl?: string }) {
   const mountRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -223,6 +282,33 @@ function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
     }
     
     scene.add(model)
+
+    // Load VELARIS 3D mesh if URL provided
+    let gltfLoader: GLTFLoader | null = null
+    let loadedMesh: THREE.Object3D | null = null
+    if (meshUrl) {
+      gltfLoader = new GLTFLoader()
+      gltfLoader.load(
+        meshUrl,
+        (gltf) => {
+          loadedMesh = gltf.scene
+          scene.add(loadedMesh)
+          // Adjust camera to include both model and mesh
+          const combined = new THREE.Object3D()
+          combined.add(loadedMesh, model)
+          const box = new THREE.Box3().setFromObject(combined)
+          const center = box.getCenter(new THREE.Vector3())
+          const size = box.getSize(new THREE.Vector3())
+          const dist = Math.max(size.x, size.y, size.z, 4) * 1.4
+          camera.position.set(center.x + dist, center.y + dist * 0.8, center.z + dist)
+          camera.lookAt(center)
+        },
+        undefined,
+        (error) => {
+          console.error('Failed to load VELARIS mesh:', error)
+        }
+      )
+    }
 
     const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000)
     const box = new THREE.Box3().setFromObject(model)
@@ -253,6 +339,9 @@ function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
       cancelAnimationFrame(raf)
       controls.dispose()
       scene.remove(model)
+      if (loadedMesh && gltfLoader) {
+        scene.remove(loadedMesh)
+      }
       // Remove furniture from scene
       if (roomFurniture && roomFurniture.length > 0) {
         roomFurniture.forEach((furn: any) => {
@@ -262,7 +351,7 @@ function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
       renderer.dispose()
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
     }
-  }, [model, roomFurniture])
+  }, [model, meshUrl, roomFurniture])
 
   return <div ref={mountRef} style={{ width: '100%', height: 400, borderRadius: 8, overflow: 'hidden' }} />
 }
@@ -447,7 +536,19 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
             roomFurniture.push({ type: 'wardrobe', mesh: wardrobe, roomId })
           }
           
-          if (roomName.includes('jewellery') || roomName.includes('studio')) {
+          
+          if (roomName.includes('fitting') || roomName.includes('tryon')) {
+            // Fitting room furniture
+            const fittingMirror = new THREE.Mesh(
+              new THREE.BoxGeometry(2, 2.5, 0.5),
+              new THREE.MeshStandardMaterial({ color: 0xfab1a0 })
+            )
+            fittingMirror.position.set(0, 1.25, 0)
+            roomFurniture.push({ type: 'fitting-room', mesh: fittingMirror, roomId })
+          }
+
+
+if (roomName.includes('jewellery') || roomName.includes('studio')) {
             // Jewellery studio furniture
             const displayCase = new THREE.Mesh(
               new THREE.BoxGeometry(2, 1, 1),

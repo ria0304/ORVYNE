@@ -4,8 +4,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
-const BASE_URL: string = (import.meta as any).env?.VITE_API_URL || 'http://127.0.0.1:8001'
-const USER_ID = 'user-123'
+const BASE_URL: string = (import.meta as any).env?.VITE_API_URL || 'http://127.0.0.1:8000'
+const USER_ID = (import.meta as any).env?.VITE_USER_ID || 'user-123'
 
 // ─── API helper ───
 async function api(path: string, init: RequestInit = {}): Promise<any> {
@@ -156,7 +156,7 @@ const keyup = (e: KeyboardEvent) => {
       mount.addEventListener('mousemove', mouseMove)
     }
     return () => mouseRef.current && mouseRef.current.removeEventListener('mousemove', mouseMove)
-  }, [])n
+  }, [])
 
   // Physics and movement
   React.useEffect(() => {
@@ -241,7 +241,7 @@ async function loadActualBatisseGLB(glbBase64: string): Promise<THREE.Group | nu
 }
 
 // ─── Three.js viewer ───
-function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
+function ThreeViewer({ model, meshUrl }: { model: THREE.Object3D | null; meshUrl?: string }) {
   const mountRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -265,6 +265,32 @@ function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
     }
     
     scene.add(model)
+
+    // Load VELARIS mesh if URL provided
+    let gltfLoader: GLTFLoader | null = null
+    if (meshUrl) {
+      gltfLoader = new GLTFLoader()
+      gltfLoader.load(
+        meshUrl,
+        (gltf) => {
+          const mesh = gltf.scene
+          scene.add(mesh)
+          // Adjust camera to include both model and mesh
+          const combined = new THREE.Object3D()
+          combined.add(mesh, model)
+          const box = new THREE.Box3().setFromObject(combined)
+          const center = box.getCenter(new THREE.Vector3())
+          const size = box.getSize(new THREE.Vector3())
+          const dist = Math.max(size.x, size.y, size.z, 4) * 1.4
+          camera.position.set(center.x + dist, center.y + dist * 0.8, center.z + dist)
+          camera.lookAt(center)
+        },
+        undefined,
+        (error) => {
+          console.error('Failed to load VELARIS mesh:', error)
+        }
+      )
+    }
 
     const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000)
     const box = new THREE.Box3().setFromObject(model)
@@ -295,6 +321,9 @@ function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
       cancelAnimationFrame(raf)
       controls.dispose()
       scene.remove(model)
+      if (gltfLoader && meshUrl) {
+        scene.remove(gltf.scene)
+      }
       // Remove furniture from scene
       if (roomFurniture && roomFurniture.length > 0) {
         roomFurniture.forEach((furn: any) => {
@@ -304,7 +333,7 @@ function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
       renderer.dispose()
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
     }
-  }, [model, roomFurniture])
+  }, [model, meshUrl, roomFurniture])
 
   return <div ref={mountRef} style={{ width: '100%', height: 400, borderRadius: 8, overflow: 'hidden' }} />
 }
@@ -393,15 +422,16 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
     ;(async () => {
       try {
         setHomeConfig('loading')
-        // Get geometry for project 1
-        const data = await api('/api/batisse/projects/1/geometry')
+        // Get geometry for project
+        const projectId = 1
+        const data = await api(`/api/batisse/projects/${projectId}/geometry`)
         if (cancelled) return
         const roomList: any[] = data.rooms || []
 
         if (data.ready_for_3d && data.geometry) {
           try {
             // Export as GLB
-            const glb = await api('/api/batisse/projects/1/geometry/export-glb', { method: 'POST' })
+            const glb = await api(`/api/batisse/projects/${projectId}/geometry/export-glb`, { method: 'POST' })
             const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null
             if (cancelled) return
             if (loaded) {
@@ -603,7 +633,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
   // WYA Wardrobe browsing
   const browseWyaWardrobe = async () => {
     try {
-      const wardrobe = await api("/api/wardrobe/browse", { method: "POST" })
+      const wardrobe = await api("/api/wardrobe/browse", { method: "POST", body: JSON.stringify({ user_id: USER_ID }) })
       if (wardrobe.items && wardrobe.items.length > 0) {
         const itemsText = wardrobe.items
           .slice(0, 5)
@@ -622,28 +652,21 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
   // TryOn fitting studio
   const tryOnGarment = async () => {
     try {
-      // Create guest user if needed
-      const userId = 'user-' + Date.now()
-      const tryonSvc = await (await import('../backend/app/services/tryon_service')).get_tryon_service()
-      const garment = await tryonSvc.list_garments(userId)
-      if (garment.garments && garment.garments.length > 0) {
-        const garmentImage = garment.garments[0].image_url ?? garment.garments[0].file_url ?? ''
-        if (garmentImage) {
-          const avatarParams = { type: avatarType, primary: avatarColors.primary, secondary: avatarColors.secondary }
-          const result = await tryonSvc.generate_tryon(garmentImage, avatarParams, userId)
-          toast(`TryOn preview generated`)
-          // Display the result
-          if (result.image_url) {
-            toast(`TryOn result: ${result.image_url}`)
-          }
-        } else {
-          toast("No garments available for try-on")
-        }
-      } else {
-        toast("No garments in your TryOn account")
+      const result = await api("/api/tryon/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          garment_image_url: '/test.jpg',
+          avatar_params: { type: avatarType, primary: avatarColors.primary, secondary: avatarColors.secondary },
+          user_id: USER_ID,
+        }),
+      })
+      toast(`Try-on preview generated`)
+      // Display the result
+      if (result.image_url) {
+        toast(`TryOn result: ${result.image_url}`)
       }
     } catch (error) {
-      toast("TryOn failed")
+      toast("Try-on failed")
       console.error("TRYON ERROR:", error)
     }
   }
@@ -651,20 +674,22 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
   // VELARIS jewellery design
   const generateJewelleryDesign = async () => {
     try {
-      const userId = 'user-' + Date.now()
-      const velarisSvc = await (await import('../backend/app/services/velaris_service')).get_velaris_service()
-      const designReq = {
-        jewelry_type: 'ring',
-        gemstone: 'diamond',
-        metal: 'yellow gold',
-        carat: 1.0,
-        shape: 'round',
-      }
-      const result = await velarisSvc.generate_3d_mesh(designReq)
+      const result = await api("/api/jewellery/generate-design", {
+        method: "POST",
+        body: JSON.stringify({
+          jewelry_type: "ring",
+          gemstone: "diamond",
+          metal: "yellow gold",
+          carat: 1.0,
+          shape: "round",
+        }),
+      })
       if (result.mesh_url) {
         toast(`Jewellery design generated: ${result.description}`)
-        // In a full implementation, the mesh_url would be loaded into the Three.js scene
-        toast(`3D mesh available at: ${result.mesh_url.substring(0, 50)}...`)
+        // Load the 3D mesh into the scene
+        const meshUrl = result.mesh_url
+        setLoadedMeshUrl(meshUrl)
+        setShowMesh(true)
       } else {
         toast(`Design generation failed: ${result.error || 'unknown error'}`)
       }
@@ -685,7 +710,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
         )}
       </small>
       <div style={{ margin: '1rem 0' }}>
-        {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} roomFurniture={roomFurniture} />}
+        {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} roomFurniture={roomFurniture} meshUrl={loadedMeshUrl} />}
 <LunaCompanion
           playerPos={playerPos}
           playerPerspective={playerPerspective}
@@ -1353,6 +1378,8 @@ export default function App() {
   const [avatarType, setAvatarType] = useState<'human' | 'elf' | 'cat' | 'dog'>('human')
   const [avatarColors, setAvatarColors] = useState({ primary: 0x6c5ce7, secondary: 0xa29bfe })
   const [avatarProps, setAvatarProps] = useState({ type: 'human', primary: 0x6c5ce7, secondary: 0xa29bfe })
+  const [loadedMeshUrl, setLoadedMeshUrl] = useState<string | null>(null)
+  const [showMesh, setShowMesh] = useState(false)
 
   useEffect(() => {
     fetch(`${BASE_URL}/api/health`)

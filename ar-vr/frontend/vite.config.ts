@@ -8,4 +8,5 @@ export default defineConfig({
     port: 2000,
     host: true,
   },
+  envDir: './',
 })

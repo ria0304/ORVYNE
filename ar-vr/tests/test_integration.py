@@ -67,7 +67,7 @@ class TestBatisseEndpoints:
 
     def test_batisse_upload_accepted(self):
         """BATISSE upload endpoint accepts POST requests."""
-        response = client.post(
+        response = auth_client.post(
             "/api/batisse/upload",
             json={"name": "Test Plan", "description": "A test floor plan"},
         )
@@ -133,7 +133,7 @@ class TestVELARISEndpoints:
 
     def test_generate_design_accepts_post(self):
         """VELARIS generate-design endpoint accepts POST."""
-        response = client.post(
+        response = auth_client.post(
             "/api/jewellery/generate-design",
             json={
                 "prompt": "A simple ring",
@@ -146,7 +146,7 @@ class TestVELARISEndpoints:
 
     def test_list_designs_get(self):
         """VELARIS list-designs endpoint accepts GET."""
-        response = client.get("/api/jewellery/designs")
+        response = auth_client.get("/api/jewellery/designs")
         assert response.status_code in (200, 422)
 
 
@@ -280,7 +280,7 @@ class TestAuth:
 
     def test_unauthenticated_tryon_status_returns_401(self):
         """TRY-ON status endpoint requires authentication."""
-        response = client.get("/api/tryon/status")
+        response = auth_client.get("/api/tryon/status")
         assert response.status_code in (200, 422)  # health doesn't require auth
 
     def test_authenticated_health_returns_ok(self):

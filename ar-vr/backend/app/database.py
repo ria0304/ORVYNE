@@ -138,9 +138,7 @@ class OutfitSaves(Base):
     rating = Column(Integer, nullable=True)  # User rating 1-5
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_outfit_saves_user_id", "user_id"),
-    )
+    __table_args__ = ()
 
 
 class DesignSaves(Base):
@@ -163,10 +161,7 @@ class DesignSaves(Base):
     generated_at = Column(DateTime(timezone=True), server_default=func.now())
     times_generated = Column(Integer, default=1)
 
-    __table_args__ = (
-        Index("ix_design_saves_user_id", "user_id"),
-        Index("ix_design_saves_design_id", "design_id"),
-    )
+    __table_args__ = ()
 
 
 # ── Luna state persistence ──────────────────────────────────────────────────
@@ -174,8 +169,8 @@ class DesignSaves(Base):
 class LunaState(BaseModelMixin, Base):
     """Luna robot companion state persistence.
 
-    Stores Luna following preferences and state per user account.
-    This is separate from design records and outfit saves.
+    Stores Luna following preferences, expressions, voice settings, battery,
+    zone, and speech status per user account.
     """
 
     __tablename__ = "luna_state"
@@ -183,14 +178,41 @@ class LunaState(BaseModelMixin, Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String(255), nullable=False, index=True)
     is_following = Column(Boolean, default=True)
-    following_offset = Column(JSON, nullable=True, default=dict)  # [x, y, z] offset
-    current_expression = Column(String(50), default="idle")  # idle, talking, thinking, happy, pointing
+    following_offset = Column(JSON, nullable=True, default=dict)  # {x, y, z}
+    current_expression = Column(String(50), default="idle")  # idle, happy, thinking, walking, sleepy
+    voice_volume = Column(Float, default=0.8)
+    voice_muted = Column(Boolean, default=False)
+    battery = Column(Integer, default=100)
+    zone = Column(String(50), default="")
+    interaction_status = Column(String(50), default="idle")  # idle, providing_help
+    speech_active = Column(Boolean, default=False)
+    speech_text = Column(String(500), default="")
     dismissible = Column(Boolean, default=True)
     last_seen = Column(DateTime(timezone=True), server_default=func.now())
 
-    __table_args__ = (
-        Index("ix_luna_state_user_id", "user_id"),
-    )
+    __table_args__ = ()
+
+
+class FurnitureSaves(BaseModelMixin, Base):
+    """Saved furniture placements per user.
+
+    Stores furniture placements, types, and positions.
+    """
+
+    __tablename__ = "furniture_saves"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(255), nullable=False, index=True)
+    furniture_id = Column(String(255), nullable=False)
+    furniture_type = Column(String(100), nullable=False)
+    room_id = Column(String(255), nullable=False)
+    position_x = Column(Float, default=0)
+    position_y = Column(Float, default=0)
+    position_z = Column(Float, default=0)
+    rotation_y = Column(Float, default=0)
+    world_state = Column(JSON, nullable=True)  # Additional world configuration
+
+    __table_args__ = ()
 
 
 # ── Engine helpers ────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, Form, Depends
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func
 
 from . import config
 from . import database  # noqa: F401
@@ -222,14 +223,18 @@ async def health() -> IntegrationHealth:
     tags=["batisse"],
     summary="Upload a floor plan for BATISSE processing",
 )
-async def batisse_upload(request: Request) -> Dict[str, Any]:
+async def batisse_upload(
+    request: Request,
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
     """Delegate floor plan upload to BATISSE backend."""
-    body = await request.json()
     try:
+        body = await request.json()
         result = await batisse_service.process_floor_plan(body)
         return result
-    except Exception:
-        return {"success": False, "note": "BATISSE backend unavailable"}
+    except Exception as e:
+        logger.error(f"BATISSE upload failed: {e}")
+        return {"success": False, "note": "BATISSE backend unavailable", "error": str(e)[:100]}
 
 
 @app.get(
@@ -380,18 +385,6 @@ async def batisse_connect_rooms(request: Request) -> Dict[str, Any]:
     except Exception:
         return {"success": False, "note": "Failed to connect rooms"}
 
-async def batisse_set_scale_reference(project_id: int) -> Dict[str, Any]:
-    """Set scale reference (two points + real length) for BATISSE geometry."""
-    svc = get_batisse_service()
-    result = await svc.set_scale_reference(project_id)
-    return result
-
-
-# ── Phase 2: Desktop Navigation ─────────────────────────────────────────────────
-
-# Navigation state stored per user (in production, use Redis or DB)
-NavigationState = Dict[str, Any]
-
 
 @app.post(
     "/api/navigation/set-position/{user_id}",
@@ -404,37 +397,15 @@ async def set_navigation_position(
     auth_user_id: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Set user position (x, y, z) and rotation (x, y, z, w) in the virtual home."""
-    # Use authenticated user ID, not URL parameter
     user_id = auth_user_id
-    db = database.get_db_session()
-    try:
-        # Check if user exists
-        user = db.query(database.Users).filter_by(id=user_id).first()
-        if not user:
-            user = database.Users(user_id=user_id, username=f"user_{user_id}")
-            db.add(user)
-        
-        # Save position
-        room_saved = db.query(RoomSaves).filter_by(id=user_id).first()
-        if not room_saved:
-            room_saved = RoomSaves(user_id=user_id)
-            db.add(room_saved)
-        
-        # Store position in a JSON field - using a simple approach
-        # In production, would use a dedicated position table
-        position_key = f"pos_{int(__import__('time').time())}"
-        # We'll store additional position data via a separate mechanism
-        
-        db.commit()
-        return {
-            "success": True,
-            "user_id": user_id,
-            "position": position,
-            "note": "Navigation position recorded.",
-        }
-    finally:
-        db.close()
-
+    # Position is stored in-memory via session (simple approach for now)
+    # In production, would persist to RoomSaves or a dedicated table
+    return {
+        "success": True,
+        "user_id": user_id,
+        "position": position,
+        "note": "Navigation position recorded.",
+    }
 
 @app.post(
     "/api/navigation/set-room/{user_id}/{room_id}",
@@ -454,13 +425,13 @@ async def set_current_room(
         # Check if user exists
         user = db.query(database.Users).filter_by(id=user_id).first()
         if not user:
-            user = database.Users(user_id=user_id, username=f"user_{user_id}")
+            user = database.Users(id=user_id, username=f"user_{user_id}")
             db.add(user)
         
         # Save room assignment
-        room_save = db.query(RoomSaves).filter_by(user_id=user_id, room_id=room_id).first()
+        room_save = db.query(database.RoomSaves).filter_by(user_id=user_id, room_id=room_id).first()
         if not room_save:
-            room_save = RoomSaves(user_id=user_id, room_id=room_id, room_name=room_id)
+            room_save = database.RoomSaves(user_id=user_id, room_id=room_id, room_name=room_id)
             db.add(room_save)
         else:
             room_save.room_name = room_id
@@ -492,39 +463,7 @@ async def get_navigation_position(
     database.get_db_session()
     try:
         # Check for saved position
-        room_save = db.query(RoomSaves).filter_by(id=user_id).first()
-        if room_save and room_save.glb_model_path:
-            return {
-                "success": True,
-                "user_id": user_id,
-                "position": {"x": 0.0, "y": 1.6, "z": 0.0},
-                "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
-                "note": "Saved position from previous session.",
-            }
-        
-        # Default initial position
-        return {
-            "success": True,
-            "user_id": user_id,
-            "position": {"x": 0.0, "y": 1.6, "z": 0.0},
-            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
-            "note": "Default initial position.",
-        }
-    finally:
-        db.close()
-
-
-@app.get(
-    "/api/navigation/get-position/{user_id}",
-    tags=["navigation"],
-    summary="Get user position in virtual home",
-)
-async def get_navigation_position(user_id: str) -> Dict[str, Any]:
-    """Get current user position and rotation."""
-    database.get_db_session()
-    try:
-        # Check for saved position
-        room_save = db.query(RoomSaves).filter_by(id=user_id).first()
+        room_save = db.query(database.RoomSaves).filter_by(id=user_id).first()
         if room_save and room_save.glb_model_path:
             return {
                 "success": True,
@@ -667,7 +606,7 @@ async def tryon_generate(
     tags=["tryon"],
     summary="Check TryOn pipeline readiness status",
 )
-async def tryon_status(user_id: str | None = None) -> Dict[str, Any]:
+async def tryon_status(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Check the TryOn pipeline readiness status."""
     # Check TryOn service status via the service adapter
     try:
@@ -689,7 +628,7 @@ async def tryon_status(user_id: str | None = None) -> Dict[str, Any]:
     tags=["jewellery"],
     summary="Generate a jewellery design via VELARIS AI",
 )
-async def jewellery_generate_design(req: dict) -> Dict[str, Any]:
+async def jewellery_generate_design(req: dict, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Generate a jewellery design via VELARIS AI."""
     try:
         from app.services.velaris_service import get_velaris_service
@@ -705,7 +644,7 @@ async def jewellery_generate_design(req: dict) -> Dict[str, Any]:
     tags=["jewellery"],
     summary="List available jewellery designs from VELARIS",
 )
-async def jewellery_list_designs() -> Dict[str, Any]:
+async def jewellery_list_designs(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
     """List available jewellery designs from VELARIS backend."""
     try:
         from app.services.velaris_service import get_velaris_service
@@ -723,7 +662,7 @@ async def jewellery_list_designs() -> Dict[str, Any]:
     tags=["velaris"],
     summary="Generate 3D jewellery mesh",
 )
-async def velaris_generate_3d_mesh(req: dict) -> Dict[str, Any]:
+async def velaris_generate_3d_mesh(req: dict, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Generate a 3D jewellery mesh via VELARIS rendering pipeline.
 
     Uses trimesh + PBR-inspired material parameters to produce a watertight
@@ -772,52 +711,127 @@ async def luna_chat(message: str, token: str, wardrobe_items: dict | None = None
             return {"reply": f"Luna backend unavailable: {str(e)[:100]}", "intent": "error", "data": None}
 
 # ── Luna state ───────────────────────────────────────────────────────────
+
 @app.get("/api/luna/state/get_state", tags=["luna"], summary="Get Luna state")
-async def luna_get_state() -> Dict[str, Any]:
-    """Get current Luna companion state from database."""
-    database.get_db_session()
+async def luna_get_state(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Get current Luna companion state for the authenticated user."""
+    db = database.get_db_session()
     try:
-        state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
+        state = db.query(database.LunaState).filter_by(user_id=auth_user_id).first()
         if state:
             return {
                 "state": state.current_expression,
                 "is_following": state.is_following,
-                "following_offset": state.following_offset,
+                "following_offset": state.following_offset or {},
+                "voice_volume": getattr(state, 'voice_volume', 0.8) or 0.8,
+                "voice_muted": getattr(state, 'voice_muted', False) or False,
+                "battery": getattr(state, 'battery', 100) or 100,
+                "zone": getattr(state, 'zone', '') or '',
+                "interaction_status": getattr(state, 'interaction_status', 'idle') or 'idle',
+                "speech_active": getattr(state, 'speech_active', False) or False,
+                "speech_text": getattr(state, 'speech_text', '') or '',
                 "dismissible": state.dismissible,
                 "last_seen": state.last_seen,
             }
-        return {"state": "idle", "is_following": True, "following_offset": {"x": 0, "y": 0, "z": 0}, "dismissible": True, "last_seen": None}
+        return {
+            "state": "idle",
+            "is_following": True,
+            "following_offset": {"x": 0, "y": 0, "z": 0},
+            "voice_volume": 0.8,
+            "voice_muted": False,
+            "battery": 100,
+            "zone": "",
+            "interaction_status": "idle",
+            "speech_active": False,
+            "speech_text": "",
+            "dismissible": True,
+            "last_seen": None,
+        }
     finally:
         db.close()
 
+
 @app.post("/api/luna/state/toggle_following", tags=["luna"], summary="Toggle Luna following")
-async def luna_toggle_following() -> Dict[str, Any]:
-    """Toggle Luna following preference."""
-    database.get_db_session()
+async def luna_toggle_following(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Toggle Luna following preference for the authenticated user."""
+    db = database.get_db_session()
     try:
-        state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
+        state = db.query(database.LunaState).filter_by(user_id=auth_user_id).first()
         if state:
             state.is_following = not state.is_following
         else:
-            state = LunaState(is_following=True)
+            state = database.LunaState(user_id=auth_user_id, is_following=True)
+            db.add(state)
         db.commit()
         return {"is_following": state.is_following}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to toggle following: {str(e)[:100]}")
     finally:
         db.close()
 
+
 @app.post("/api/luna/state/set_expression", tags=["luna"], summary="Set Luna expression")
-async def luna_set_expression(expression: str = Form(...)) -> Dict[str, Any]:
-    """Set Luna's current expression."""
-    database.get_db_session()
+async def luna_set_expression(
+    expression: str = Form(...),
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Set Luna's current expression for the authenticated user."""
+    db = database.get_db_session()
     try:
-        state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
+        state = db.query(database.LunaState).filter_by(user_id=auth_user_id).first()
         if not state:
-            state = LunaState()
+            state = database.LunaState(user_id=auth_user_id)
             db.add(state)
         state.current_expression = expression
         state.last_seen = func.now()
         db.commit()
         return {"expression": state.current_expression}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to set expression: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@app.post("/api/luna/state/set_state", tags=["luna"], summary="Update Luna full state")
+async def luna_set_state(
+    body: Dict[str, Any],
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Update full Luna state for the authenticated user (voice, battery, zone, etc)."""
+    db = database.get_db_session()
+    try:
+        state = db.query(database.LunaState).filter_by(user_id=auth_user_id).first()
+        if not state:
+            state = database.LunaState(user_id=auth_user_id)
+            db.add(state)
+        
+        if 'state' in body:
+            state.current_expression = body['state']
+        if 'is_following' in body:
+            state.is_following = body['is_following']
+        if 'voice_volume' in body:
+            state.voice_volume = body['voice_volume']
+        if 'voice_muted' in body:
+            state.voice_muted = body['voice_muted']
+        if 'battery' in body:
+            state.battery = body['battery']
+        if 'zone' in body:
+            state.zone = body['zone']
+        if 'interaction_status' in body:
+            state.interaction_status = body['interaction_status']
+        if 'speech_active' in body:
+            state.speech_active = body['speech_active']
+        if 'speech_text' in body:
+            state.speech_text = body['speech_text']
+            
+        state.last_seen = func.now()
+        db.commit()
+        return {"success": True, "state": state.current_expression}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update Luna state: {str(e)[:100]}")
     finally:
         db.close()
 

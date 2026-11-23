@@ -95,6 +95,48 @@ const keyup = (e: KeyboardEvent) => {
       if (e.code === 'KeyE' && currentRoom) {
         handleDoorInteraction(currentRoom, 'front')
       }
+      // Furniture interaction: E key release when not in a room
+      if (e.code === 'KeyE' && !currentRoom && roomFurniture.length > 0) {
+        const playerCenter = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z)
+        const nearestFurniture = roomFurniture.reduce((nearest, furn) => {
+          const furnCenter = furn.mesh.position.clone()
+          const distance = playerCenter.distanceTo(furnCenter)
+          return distance < (nearest ? nearest.distance : Infinity) ? { mesh: furn.mesh, distance: distance, type: furn.type } : nearest
+        }, null)
+        if (nearestFurniture) {
+          switch (nearestFurniture.type) {
+            case 'sofa':
+              toast('Press E to sit')
+              break
+            case 'bed':
+              toast('Press E to rest')
+              break
+            case 'wardrobe':
+              // Open WYA wardrobe browsing
+              toast('Opening wardrobe...')
+              browseWyaWardrobe()
+              break
+            case 'fitting-room':
+              // Enter TryOn fitting studio
+              toast('Opening fitting studio...')
+              tryOnGarment()
+              break
+            case 'counter':
+              toast('Press E to interact')
+              break
+            case 'display case':
+              toast('Press E to open jewellery studio')
+              break
+            case 'jewellery-studio':
+              // Open VELARIS jewellery studio
+              toast('Opening jewellery studio...')
+              generateJewelleryDesign()
+              break
+            default:
+              toast('Interact with object')
+          }
+        }
+      }
     }
     window.addEventListener('keydown', keydown)
     window.addEventListener('keyup', keyup)
@@ -558,6 +600,80 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
       .finally(() => setLoading(false))
   }
 
+  // WYA Wardrobe browsing
+  const browseWyaWardrobe = async () => {
+    try {
+      const wardrobe = await api("/api/wardrobe/browse", { method: "POST" })
+      if (wardrobe.items && wardrobe.items.length > 0) {
+        const itemsText = wardrobe.items
+          .slice(0, 5)
+          .map((item: any) => item.item_name ?? item.name ?? "Item")
+          .join(", ")
+        toast(`Wardrobe loaded with: ${itemsText}`)
+      } else {
+        toast("Wardrobe loaded")
+      }
+    } catch (error) {
+      toast("Failed to load wardrobe")
+      console.error("WARDROBE ERROR:", error)
+    }
+  }
+
+  // TryOn fitting studio
+  const tryOnGarment = async () => {
+    try {
+      // Create guest user if needed
+      const userId = 'user-' + Date.now()
+      const tryonSvc = await (await import('../backend/app/services/tryon_service')).get_tryon_service()
+      const garment = await tryonSvc.list_garments(userId)
+      if (garment.garments && garment.garments.length > 0) {
+        const garmentImage = garment.garments[0].image_url ?? garment.garments[0].file_url ?? ''
+        if (garmentImage) {
+          const avatarParams = { type: avatarType, primary: avatarColors.primary, secondary: avatarColors.secondary }
+          const result = await tryonSvc.generate_tryon(garmentImage, avatarParams, userId)
+          toast(`TryOn preview generated`)
+          // Display the result
+          if (result.image_url) {
+            toast(`TryOn result: ${result.image_url}`)
+          }
+        } else {
+          toast("No garments available for try-on")
+        }
+      } else {
+        toast("No garments in your TryOn account")
+      }
+    } catch (error) {
+      toast("TryOn failed")
+      console.error("TRYON ERROR:", error)
+    }
+  }
+
+  // VELARIS jewellery design
+  const generateJewelleryDesign = async () => {
+    try {
+      const userId = 'user-' + Date.now()
+      const velarisSvc = await (await import('../backend/app/services/velaris_service')).get_velaris_service()
+      const designReq = {
+        jewelry_type: 'ring',
+        gemstone: 'diamond',
+        metal: 'yellow gold',
+        carat: 1.0,
+        shape: 'round',
+      }
+      const result = await velarisSvc.generate_3d_mesh(designReq)
+      if (result.mesh_url) {
+        toast(`Jewellery design generated: ${result.description}`)
+        // In a full implementation, the mesh_url would be loaded into the Three.js scene
+        toast(`3D mesh available at: ${result.mesh_url.substring(0, 50)}...`)
+      } else {
+        toast(`Design generation failed: ${result.error || 'unknown error'}`)
+      }
+    } catch (error) {
+      toast("Jewellery design failed")
+      console.error("VELARIS ERROR:", error)
+    }
+  }
+
   return (
     <Card title="BATISSE — Floor Plan & 3D Home" color="#3b82f6" description="Upload a floor plan and explore your 3D dollhouse.">
       <small style={{ color: '#94a3b8' }}>
@@ -577,6 +693,7 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
           setLunaState={setLunaState}
           toggleLunaFollowing={toggleLunaFollowing}
           setLunaExpression={setLunaExpression}
+          currentRoom={currentRoom}
         />
         <ExteriorEnvironment />
       </div>
@@ -621,13 +738,14 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
 }
 
 // ─── Luna Companion ───
-function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, toggleLunaFollowing, setLunaExpression }: {
+function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, toggleLunaFollowing, setLunaExpression, currentRoom }: {
   playerPos: THREE.Vector3
   playerPerspective: 'first' | 'third'
   lunaState: string
   setLunaState: React.Dispatch<React.SetStateAction<string>>
   toggleLunaFollowing: () => void
   setLunaExpression: (expression: string) => void
+  currentRoom: string | null
 }) {
   // Luna's position follows the player
   const lunaPosition = React.useRef(new THREE.Vector3(playerPos.x, playerPos.y + 1, playerPos.z))
@@ -645,6 +763,44 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
       // Luna follows player - already handled by position update
     }
   }, [lunaState])
+
+  // Room-aware greetings and assistance
+  const getRoomGreeting = (roomName: string | null): string => {
+    if (!roomName) return ''
+    const lowerName = roomName.toLowerCase()
+    if (lowerName.includes('living') || lowerName.includes('sitting')) {
+      return 'Welcome home! Would you like to explore or relax?'
+    }
+    if (lowerName.includes('bedroom') || lowerName.includes('bed')) {
+      return 'Good night! Sleep well.'
+    }
+    if (lowerName.includes('kitchen') || lowerName.includes('cook')) {
+      return 'Would you like a snack?'
+    }
+    if (lowerName.includes('bathroom') || lowerName.includes('bath')) {
+      return 'The bathroom is ready.'
+    }
+    if (lowerName.includes('wardrobe') || lowerName.includes('closet')) {
+      return 'The wardrobe is available.'
+    }
+    if (lowerName.includes('jewellery') || lowerName.includes('studio')) {
+      return 'Would you like to design jewellery?'
+    }
+    return `You are in the ${roomName}.`
+  }
+
+  // Display greeting when entering a room
+  React.useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (currentRoom) {
+        const greeting = getRoomGreeting(currentRoom)
+        if (greeting) {
+          toast(greeting)
+        }
+      }
+    }, 3000)
+    return () => clearTimeout(timeout)
+  }, [currentRoom])
 
   // Luna expressions
   const expressions = ['idle', 'happy', 'thinking', 'walking']

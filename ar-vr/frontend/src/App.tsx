@@ -120,7 +120,7 @@ const keyup = (e: KeyboardEvent) => {
         const nearestFurniture = roomFurniture.reduce((nearest, furn) => {
           const furnCenter = furn.mesh.position.clone()
           const distance = playerCenter.distanceTo(furnCenter)
-          return distance < (nearest ? nearest.distance : Infinity) ? { mesh: furn.mesh, distance: distance, type: furn.type } : nearest
+          return distance < (nearest ? nearest.distance : Infinity) ? { mesh: furn.mesh, distance: distance, type: furn.type, rotatable: furn.rotatable !== false } : nearest
         }, null)
         if (nearestFurniture) {
           switch (nearestFurniture.type) {
@@ -149,8 +149,21 @@ const keyup = (e: KeyboardEvent) => {
               toast('Opening fitting studio...')
               tryOnGarment()
               break
+            case 'lamp':
+            case 'table':
+              // Toggle furniture selection/placement mode
+              setSelectedFurniture(prev => prev === nearestFurniture.type ? null : nearestFurniture.type)
+              break
+            case 'plant':
+              toast('Watering plant')
+              break
+            case 'painting':
+              toast('Admiring artwork')
+              break
             default:
               toast('Interact with object')
+          }
+        }              toast('Interact with object')
           }
         }
       }
@@ -404,6 +417,11 @@ function BatissePage({ toast }: { toast: Notify }) {
 
 
 const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
+  const [selectedFurniture, setSelectedFurniture] = React.useState<string | null>(null)
+  const [isPlacing, setIsPlacing] = React.useState(false)
+  const [placePosition, setPlacePosition] = React.useState(new THREE.Vector3(0, 0, 0))
+  const [placeRotation, setPlaceRotation] = React.useState(0)
+  const [isRotating, setIsRotating] = React.useState(false)
   const [playerPerspective, setPlayerPerspective] = React.useState<'first' | 'third'>('first')
   const [playerVelocity, setPlayerVelocity] = React.useState(new THREE.Vector3(0, 0, 0))
   const [isGrounded, setIsGrounded] = React.useState(true)
@@ -435,7 +453,38 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
   }, [])
 
   // Personalised home generation
+  // Save furniture positions to localStorage
   React.useEffect(() => {
+    const saveFurniture = () => {
+      const furnitureData = roomFurniture.map(f => ({
+        type: f.type,
+        position: { x: f.mesh.position.x, y: f.mesh.position.y, z: f.mesh.position.z },
+        rotation: f.mesh.rotation.z,
+      }))
+      localStorage.setItem('orvyneFurniture', JSON.stringify(furnitureData))
+    }
+    saveFurniture()
+    const interval = setInterval(saveFurniture, 30000)
+    return () => clearInterval(interval)
+  }, [roomFurniture])
+
+  // Restore furniture positions from localStorage on startup
+  React.useEffect(() => {
+    const restored = JSON.parse(localStorage.getItem('orvyneFurniture') || '[]')
+    if (restored.length > 0) {
+      const restoredFurniture = restored.map((f: any) => {
+        const existing = roomFurniture.find(rf => rf.type === f.type)
+        if (existing) {
+          existing.mesh.position.set(f.position.x, f.position.y, f.position.z)
+          existing.mesh.rotation.set(0, 0, f.rotation)
+          return existing
+        }
+        return null
+      }).filter(Boolean)
+      setRoomFurniture(restoredFurniture)
+    }
+  }, [])
+
     let cancelled = false
     ;(async () => {
       try {
@@ -546,9 +595,52 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
             fittingMirror.position.set(0, 1.25, 0)
             roomFurniture.push({ type: 'fitting-room', mesh: fittingMirror, roomId })
           }
-
-
-if (roomName.includes('jewellery') || roomName.includes('studio')) {
+          
+          // Decoration furniture types
+          if (roomName.includes('bedroom')) {
+            // Nightstand lamp
+            const lamp = new THREE.Mesh(
+              new THREE.BoxGeometry(0.5, 1.5, 0.5),
+              new THREE.MeshStandardMaterial({ color: 0xffa500 })
+            )
+            lamp.position.set(0.5, 1.75, 0.5)
+            roomFurniture.push({ type: 'lamp', mesh: lamp, roomId, rotatable: true })
+            // Plant
+            const plant = new THREE.Mesh(
+              new THREE.SphereGeometry(0.3, 16, 16),
+              new THREE.MeshStandardMaterial({ color: 0x228b22 })
+            )
+            plant.position.set(-0.5, 0.3, -0.5)
+            roomFurniture.push({ type: 'plant', mesh: plant, roomId })
+          }
+          
+          if (roomName.includes('living')) {
+            // Rug
+            const rug = new THREE.Mesh(
+              new THREE.PlaneGeometry(3, 2),
+              new THREE.MeshStandardMaterial({ color: 0xdc143c, side: DoubleSide })
+            )
+            rug.rotation.x = -Math.PI / 2
+            rug.position.set(0, 0.01, 0)
+            roomFurniture.push({ type: 'rug', mesh: rug, roomId })
+            // Table
+            const table = new THREE.Mesh(
+              new THREE.BoxGeometry(1.5, 0.5, 1.5),
+              new THREE.MeshStandardMaterial({ color: 0x8b4513 })
+            )
+            table.position.set(0, 0.25, 0)
+            roomFurniture.push({ type: 'table', mesh: table, roomId, rotatable: true })
+          }
+          
+          if (roomName.includes('bedroom')) {
+            // Painting
+            const painting = new THREE.Mesh(
+              new THREE.PlaneGeometry(1, 1.5),
+              new THREE.MeshStandardMaterial({ color: 0x2f4f4f, side: DoubleSide })
+            )
+            painting.position.set(0, 1.5, 0.5)
+            roomFurniture.push({ type: 'painting', mesh: painting, roomId })
+          }
             // Jewellery studio furniture
             const displayCase = new THREE.Mesh(
               new THREE.BoxGeometry(2, 1, 1),
@@ -590,7 +682,56 @@ if (roomName.includes('jewellery') || roomName.includes('studio')) {
     mount.addEventListener('mousemove', mouseMove)
     return () => mount.removeEventListener('mousemove', mouseMove)
   }, [playerPerspective])
+  // Furniture interaction
+  const handleFurnitureClick = (furnType: string) => {
+    setSelectedFurniture(prev => prev === furnType ? null : furnType)
+    setIsPlacing(furnType === 'lamp' || furnType === 'table')
+    setIsRotating(furnType === 'lamp' || furnType === 'table')
+  }
 
+  const handleFurnitureDrag = (e: MouseEvent) => {
+    if (!selectedFurniture || !isPlacing) return
+    const mount = document.getElementById('three-viewer')
+    if (!mount) return
+    const rect = mount.getBoundingClientRect()
+    const x = (e.clientX - rect.left) / mount.clientWidth * 2 - 1
+    const y = -(e.clientY - rect.top) / mount.clientHeight * 2 + 1
+    const raycaster = new THREE.Raycaster()
+    raycaster.setFromCamera(new THREE.Vector2(x, y), camera)
+    const intersects = raycaster.intersectObjects(roomFurniture.map(f => f.mesh).filter(m => m), true)
+    if (intersects.length > 0) {
+      const intersect = intersects[0]
+      setPlacePosition(new THREE.Vector3(intersect.point.x, intersect.point.y, intersect.point.z))
+      // Snap to grid (half-unit increments)
+      setPlacePosition(new THREE.Vector3(
+        Math.round(intersect.point.x * 2) / 2,
+        Math.round(intersect.point.y * 2) / 2,
+        Math.round(intersect.point.z * 2) / 2
+      ))
+    }
+  }
+
+  const handleFurnitureRotate = () => {
+    if (!selectedFurniture || !isRotating) return
+    setPlaceRotation((placeRotation + Math.PI / 2) % (Math.PI * 2))
+  }
+
+  mount.addEventListener('click', (event) => {
+    const mouse = new THREE.Vector2()
+    mouse.x = (event.clientX / mount.clientWidth) * 2 - 1
+    mouse.y = -(event.clientY / mount.clientHeight) * 2 + 1
+    const raycaster = new THREE.Raycaster()
+    raycaster.setFromCamera(mouse, camera)
+    const intersects = raycaster.intersectObjects(roomFurniture.map(f => f.mesh), true)
+    if (intersects.length > 0) {
+      const clickedFurniture = roomFurniture.find(f => f.mesh === intersects[0].object)
+      if (clickedFurniture) {
+        handleFurnitureClick(clickedFurniture.type)
+      }
+    }
+  })
+
+  // Player movement and physics
   // Player movement and physics
   React.useEffect(() => {
     const speed = isSprinting ? 7 : isCrouching ? 2 : 4

@@ -498,105 +498,17 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
   \n  if (keys.forward) direction.z -= 1\n  if (keys.backward) direction.z += 1\n  if (keys.left) direction.x -= 1\n  if (keys.right) direction.x += 1
   \n  // Apply camera orientation for first-person movement\n  if (playerPerspective === 'first') {\n    const orientation = new THREE.Euler(0, playerPos.y, 0, 'YXZ')\n    direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerPos.y)\n  }\n  direction.multiplyScalar(speed * dt)\n  position.current.add(direction)\n  \n  // Jump physics\n  if (keys.jump && onGround.current) {\n    velocity.current.y = 5\n    onGround.current = false\n  }\n  \n  // Gravity\n  velocity.current.y += -9.8 * dt\n  position.current.y += velocity.current.y * dt\n  \n  // Ground check\n  if (position.current.y < 0) {\n    position.current.y = 0\n    velocity.current.y = 0\n    setIsGrounded(true)\n  } else {\n    setIsGrounded(false)\n  }\n\n  // Sync playerPos state\n  setPlayerPos(position.current)\n  setIsSprinting(keys.sprint)\n  setIsCrouching(keys.crouch)\n}, [keys, isSprinting, isCrouching, onGround])
 
-  // Keyboard handling\n  React.useEffect(() => {\n    const keydown = (e: KeyboardEvent) => {\n      switch (e.code) {\n        case 'KeyW': setKeys(s => ({ ...s, forward: true }))\n        case 'KeyS': setKeys(s => ({ ...s, backward: true }))\n        case 'KeyA': setKeys(s => ({ ...s, left: true }))\n        case 'KeyD': setKeys(s => ({ ...s, right: true }))\n        case 'Space': setKeys(s => ({ ...s, jump: true }))\n        case 'ShiftLeft': setKeys(s => ({ ...s, sprint: true }))\n        case 'ControlLeft': setKeys(s => ({ ...s, crouch: true }))\n      }\n    }\n    const keyup = (e: KeyboardEvent) => {\n      switch (e.code) {\n        case 'KeyW': setKeys(s => ({ ...s, forward: false }))\n        case 'KeyS': setKeys(s => ({ ...s, backward: false }))\n        case 'KeyA': setKeys(s => ({ ...s, left: false }))\n        case 'KeyD': setKeys(s => ({ ...s, right: false }))\n        case 'Space': setKeys(s => ({ ...s, jump: false }))\n        case 'ShiftLeft': setKeys(s => ({ ...s, sprint: false }))\n        case 'ControlLeft': setKeys(s => ({ ...s, crouch: false }))\n      }\n    }\n    window.addEventListener('keydown', keydown)\n    window.addEventListener('keyup', keyup)\n    return () => {\n      window.removeEventListener('keydown', keydown)\n      window.removeEventListener('keyup', keyup)\n    }\n  }, [])\n\n  // Camera system with F5 toggle and smooth transition\n  React.useEffect(() => {\n    const transitionDuration = 250\n    \n    const updateCamera = () => {\n      if (playerPerspective === 'first') {\n        // First-person: camera at player position\n        camera.position.copy(position.current)\n      } else {\n        // Third-person: position behind player\n        const targetPos = position.current.clone().set(position.current.x - 8, position.current.y + 2, position.current.z)\n        camera.position.lerp(targetPos, 0.1)\n      }\n      camera.lookAt(position.current)\n    }\n    \n    // Initial camera setup\n    updateCamera()\n    \n    // Animation loop for smooth camera transition\n    let raf: number\n    const animateCamera = () => {\n      updateCamera()\n      raf = requestAnimationFrame(animateCamera)\n    }\n    animateCamera()\n    \n    return () => cancelAnimationFrame(raf)\n  }, [playerPerspective, position, camera])\n\n  // Door interaction handling\n  const handleDoorInteraction = (roomId: string, doorSide: 'front' | 'back' | 'left' | 'right') => {\n    api(`/api/navigation/set-room/${USER_ID}/${roomId}`, { method: 'POST' })\n      .then(() => toast(\`Moved to room ${roomId} via ${doorSide} door\`))\n      .catch(() => toast('Door navigation failed'))\n  }\n\n  // Luna companion state\n  const [lunaState, setLunaState] = React.useState<'idle' | 'following' | 'expressions'>('idle')\n  \n  React.useEffect(() => {\n    const fetchLunaState = async () => {\n      try {\n        const state = await api('/api/luna/state/get_state')\n        setLunaState(state.state || 'idle')\n      } catch {\n        setLunaState('idle')\n      }\n    }\n    fetchLunaState()\n    const interval = setInterval(fetchLunaState, 5000)\n    return () => clearInterval(interval)\n  }, [])n\n\n  const toggleLunaFollowing = () => {\n    api('/api/luna/state/toggle_following', { method: 'POST' })\n      .then(() => toast('Luna following toggled'))\n      .catch(() => toast('Failed to toggle Luna following'))\n  }\n\n  const setLunaExpression = (expression: string) => {\n    api('/api/luna/state/set_expression', { method: 'POST', body: JSON.stringify({ expression }) })\n      .then(() => toast(`Luna expression set to ${expression}`))\n      .catch(() => toast('Failed to set Luna expression'))\n  }\n\n  useEffect(() => {\n    let cancelled = false\n    ;(async () => {\n      try {\n        const data = await api('/api/batisse/projects/1/geometry')\n        if (cancelled) return\n        const roomList: any[] = data.rooms || []\n        setRooms(roomList)\n\n        if (data.ready_for_3d && data.geometry) {\n          try {\n            const glb = await api('/api/batisse/projects/1/geometry/export-glb', { method: 'POST' })\n            const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null\n            if (cancelled) return\n            if (loaded) {\n              setSceneType(SceneType.ACTUAL_BATISSE)\n              setModel(loaded)\n              return\n            }\n          } catch {\n            /* fall through to geometry-derived */\n          }\n          setSceneType(SceneType.GEOMETRY_DERIVED)\n          setModel(createGeometryDerivedScene(roomList))\n        } else {\n          setSceneType(SceneType.GEOMETRY_DERIVED)\n          setModel(createGeometryDerivedScene(roomList))\n        }\n      } catch {\n        if (cancelled) return\n        setError('BATISSE backend unavailable — showing placeholder scene')\n        setSceneType(SceneType.PLACEHOLDER)\n        setModel(createPlaceholderScene())\n      } finally {\n        if (!cancelled) setLoading(false)\n      }\n    })()\n    return () => {\n      cancelled = true\n    }\n  }, [])\n\n  const handleRoomClick = (roomId: string) => {\n    setCurrentRoom(roomId)\n    api(`/api/navigation/set-room/${USER_ID}/${roomId}`, { method: 'POST' })\n      .then(() => toast(`Moved to room ${roomId}`))\n      .catch(() => toast('Navigation failed'))\n  }\n\n  const upload = () => {\n    setLoading(true)\n    api('/api/batisse/upload', {\n      method: 'POST',\n      body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),\n    })\n
-    let cancelled = false
-    ;(async () => {
-      try {
-        const data = await api('/api/batisse/projects/1/geometry')
-        if (cancelled) return
-        const roomList: any[] = data.rooms || []
-        setRooms(roomList)
-
-        if (data.ready_for_3d && data.geometry) {
-          try {
-            const glb = await api('/api/batisse/projects/1/geometry/export-glb', { method: 'POST' })
-            const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null
-            if (cancelled) return
-            if (loaded) {
-              setSceneType(SceneType.ACTUAL_BATISSE)
-              setModel(loaded)
-              return
-            }
-          } catch {
-            /* fall through to geometry-derived */
-          }
-          setSceneType(SceneType.GEOMETRY_DERIVED)
-          setModel(createGeometryDerivedScene(roomList))
-        } else {
-          setSceneType(SceneType.GEOMETRY_DERIVED)
-          setModel(createGeometryDerivedScene(roomList))
-        }
-      } catch {
-        if (cancelled) return
-        setError('BATISSE backend unavailable — showing placeholder scene')
-        setSceneType(SceneType.PLACEHOLDER)
-        setModel(createPlaceholderScene())
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const handleRoomClick = (roomId: string) => {
-    setCurrentRoom(roomId)
+  // Door interaction handling
+  const handleDoorInteraction = (roomId: string, doorSide: 'front' | 'back' | 'left' | 'right') => {
     api(`/api/navigation/set-room/${USER_ID}/${roomId}`, { method: 'POST' })
-      .then(() => toast(`Moved to room ${roomId}`))
-      .catch(() => toast('Navigation failed'))
+      .then(() => {
+        setCurrentRoom(roomId)
+        toast(`Moved to room ${roomId} via ${doorSide} door`)
+        setLunaExpression('idle')
+      })
+      .catch(() => toast('Door navigation failed'))
   }
 
-  const upload = () => {
-    setLoading(true)
-    api('/api/batisse/upload', {
-      method: 'POST',
-      body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
-    })
-      .then(() => toast('Floor plan uploaded'))
-      .catch(() => toast('BATISSE upload failed'))
-      .finally(() => setLoading(false))
-  }
-
-  return (
-    <Card title="BATISSE — Floor Plan & 3D Home" color="#3b82f6" description="Upload a floor plan and explore your 3D dollhouse.">
-      <small style={{ color: '#94a3b8' }}>
-        Scene: {sceneType.replace('_', ' ')} · {rooms.length} rooms
-        {homeConfig !== 'none' && (
-          <span style={{ marginLeft: '1rem', color: '#64748b' }}>
-            {homeConfig === 'generated' ? 'Home generated' : homeConfig === 'error' ? 'Home error' : 'Home loading'}
-          </span>
-        )}
-      </small>
-      <div style={{ margin: '1rem 0' }}>
-        {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} roomFurniture={roomFurniture} />}
-        <LunaCompanion
-          playerPos={playerPos}
-          playerPerspective={playerPerspective}
-          lunaState={lunaState}
-          setLunaState={setLunaState}
-          toggleLunaFollowing={toggleLunaFollowing}
-          setLunaExpression={setLunaExpression}
-        />
-        <ExteriorEnvironment />
-      </div>
-      {error && <p style={{ color: '#f87171' }}>{error}</p>}
-      {rooms.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: '1rem' }}>
-          {rooms.map((room, i) => {
-            const id = String(room.room_id ?? i)
-            return (
-              <button
-                key={id}
-                onClick={() => handleRoomClick(id)}
-                style={{
-                  padding: '0.4rem 0.8rem',
-                  borderRadius: 6,
-                  border: '1px solid #3b82f6',
-                  background: currentRoom === id ? 'rgba(59,130,246,0.5)' : 'rgba(59,130,246,0.15)',
-                  color: '#e0e7ff',
-                  cursor: 'pointer',
-                }}
               >
                 {room.room_name || room.room_function || `Room ${id}`}
               </button>
@@ -621,16 +533,15 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
 }
 
 // ─── Luna Companion ───
-function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, toggleLunaFollowing, setLunaExpression, currentRoom }: {
+function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, toggleLunaFollowing, setLunaExpression }: {
   playerPos: THREE.Vector3
   playerPerspective: 'first' | 'third'
   lunaState: string
   setLunaState: React.Dispatch<React.SetStateAction<string>>
   toggleLunaFollowing: () => void
   setLunaExpression: (expression: string) => void
-  currentRoom: string | null
 }) {
-  // Luna's position follows the player with lag
+  // Luna's position follows the player
   const lunaPosition = React.useRef(new THREE.Vector3(playerPos.x, playerPos.y + 1, playerPos.z))
 
   // Update Luna's position to follow player
@@ -640,88 +551,42 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     lunaPosition.current.z = playerPos.z
   }, [playerPos.x, playerPos.y, playerPos.z])
 
-  // Luna expression state and room context
-  const expressions = ['idle', 'happy', 'thinking', 'walking']
+  // Update Luna state based on following toggled
+  React.useEffect(() => {
+    if (lunaState === 'following') {
+      // Luna follows player - already handled by position update
+    }
+  }, [lunaState])
 
-  // Cycle expressions periodically when following
+  // Luna expressions
+  const expressions = ['idle', 'happy', 'thinking', 'walking']
+  const expressionIndex = expressions.indexOf(lunaState) || 0
+
+  // Change expression periodically when following
   React.useEffect(() => {
     const interval = setInterval(() => {
-      const currentIdx = expressions.indexOf(lunaState) || 0
-      const nextIdx = (currentIdx + 1) % expressions.length
-      setLunaExpression(expressions[nextIdx])
+      const nextIndex = (expressionIndex + 1) % expressions.length
+      setLunaExpression(expressions[nextIndex])
     }, 3000)
     return () => clearInterval(interval)
   }, [lunaState])
 
-  // Room-aware greetings and assistance
-  const getRoomGreeting = (roomName: string | null): string => {
-    if (!roomName) return ''
-    const lowerName = roomName.toLowerCase()
-    if (lowerName.includes('living') || lowerName.includes('sitting')) {
-      return 'Welcome home! Would you like to explore or relax?'
-    }
-    if (lowerName.includes('bedroom') || lowerName.includes('bed')) {
-      return 'Good night! Sleep well. Luna will keep watch.'
-    }
-    if (lowerName.includes('kitchen') || lowerName.includes('cook')) {
-      return 'Would you like a snack? Luna can help with wardrobe suggestions.'
-    }
-    if (lowerName.includes('bathroom') || lowerName.includes('bath')) {
-      return 'The bathroom is ready. Luna is available outside.'
-    }
-    if (lowerName.includes('wardrobe') || lowerName.includes('closet')) {
-      return 'The wardrobe is available. I can help with outfit suggestions using WYA.'
-    }
-    if (lowerName.includes('jewellery') || lowerName.includes('studio')) {
-      return 'Would you like to design jewellery using VELARIS? I can assist with the process.'
-    }
-    if (lowerName.includes('fitting')) {
-      return 'The fitting studio is open. I can explain how TryOn works and help you select garments.'
-    }
-    return `You are in the ${roomName}. Luna is here to assist.`
-  }
-
-  // Display greeting when entering a room
-  React.useEffect(() => {
-    const timeout = setTimeout(() => {
-      if (currentRoom) {
-        const greeting = getRoomGreeting(currentRoom)
-        if (greeting) {
-          toast(greeting)
-        }
-      }
-    }, 3000)
-    return () => clearTimeout(timeout)
-  }, [currentRoom])
-
-  // Interaction: L key to call or interact with Luna
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'KeyL') {
-        toggleLunaFollowing()
-        setLunaExpression('happy')
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentRoom])
-
-  // Luna 3D model - futuristic robot sphere with teal/orange accents
+  // Luna 3D model
   const lunaMesh = React.useRef<THREE.Mesh | null>(null)
 
   React.useEffect(() => {
-    const geometry = new THREE.SphereGeometry(0.4, 16, 16)
-    const material = new THREE.MeshStandardMaterial({ color: 0x00ccaa })
+    const geometry = new THREE.SphereGeometry(0.5, 16, 16)
+    const material = new THREE.MeshStandardMaterial({ color: 0x00ffcc })
     lunaMesh.current = new THREE.Mesh(geometry, material)
     lunaMesh.current.position.copy(lunaPosition.current)
   }, [])
 
-  // Luna following behavior with smoothing
+  // Luna following behavior
   React.useEffect(() => {
     const animate = () => {
       if (lunaMesh.current) {
-        // Smooth follow with lag - maintain comfortable distance
-        lunaMesh.current.position.lerp(lunaPosition.current, 0.1)
+        // Smooth follow with slight lag
+        lunaMesh.current.lerp(lunaPosition.current, 0.1)
         // Turn toward player
         lunaMesh.current.lookAt(playerPos)
       }
@@ -730,33 +595,14 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     animate()
   }, [lunaMesh, playerPos])
 
-  // Expression color changes based on state
-  React.useEffect(() => {
-    if (!lunaMesh.current) return
-    const material = lunaMesh.current.material as THREE.MeshStandardMaterial
-    switch (lunaState) {
-      case 'happy':
-        material.color.set(0x00ffcc) // bright teal
-        break
-      case 'thinking':
-        material.color.set(0x00aaff) // blue
-        break
-      case 'walking':
-        material.color.set(0x00ff88) // light green
-        break
-      default: // idle
-        material.color.set(0x00ccaa) // teal
-    }
-  }, [lunaState])
-
   return (
     <group ref={lunaMesh} style={{
       position: 'absolute',
-      width: 64,
-      height: 64,
+      width: 100,
+      height: 100,
       pointerEvents: 'none'
     }}>
-      {/* Luna companion - futuristic robot floating near player */}
+      {/* Luna is rendered via Three.js in the scene */}
     </group>
   )
 }

@@ -4,8 +4,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
-const BASE_URL: string = (import.meta as any).env?.VITE_API_URL || 'http://127.0.0.1:8000'
-const USER_ID = (import.meta as any).env?.VITE_USER_ID || 'user-123'
+const BASE_URL: string = (import.meta as any).env?.VITE_API_URL || 'http://127.0.0.1:8001'
+const USER_ID = 'user-123'
 
 // ─── API helper ───
 async function api(path: string, init: RequestInit = {}): Promise<any> {
@@ -95,48 +95,6 @@ const keyup = (e: KeyboardEvent) => {
       if (e.code === 'KeyE' && currentRoom) {
         handleDoorInteraction(currentRoom, 'front')
       }
-      // Furniture interaction: E key release when not in a room
-      if (e.code === 'KeyE' && !currentRoom && roomFurniture.length > 0) {
-        const playerCenter = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z)
-        const nearestFurniture = roomFurniture.reduce((nearest, furn) => {
-          const furnCenter = furn.mesh.position.clone()
-          const distance = playerCenter.distanceTo(furnCenter)
-          return distance < (nearest ? nearest.distance : Infinity) ? { mesh: furn.mesh, distance: distance, type: furn.type } : nearest
-        }, null)
-        if (nearestFurniture) {
-          switch (nearestFurniture.type) {
-            case 'sofa':
-              toast('Press E to sit')
-              break
-            case 'bed':
-              toast('Press E to rest')
-              break
-            case 'wardrobe':
-              // Open WYA wardrobe browsing
-              toast('Opening wardrobe...')
-              browseWyaWardrobe()
-              break
-            case 'fitting-room':
-              // Enter TryOn fitting studio
-              toast('Opening fitting studio...')
-              tryOnGarment()
-              break
-            case 'counter':
-              toast('Press E to interact')
-              break
-            case 'display case':
-              toast('Press E to open jewellery studio')
-              break
-            case 'jewellery-studio':
-              // Open VELARIS jewellery studio
-              toast('Opening jewellery studio...')
-              generateJewelleryDesign()
-              break
-            default:
-              toast('Interact with object')
-          }
-        }
-      }
     }
     window.addEventListener('keydown', keydown)
     window.addEventListener('keyup', keyup)
@@ -156,7 +114,7 @@ const keyup = (e: KeyboardEvent) => {
       mount.addEventListener('mousemove', mouseMove)
     }
     return () => mouseRef.current && mouseRef.current.removeEventListener('mousemove', mouseMove)
-  }, [])
+  }, [])n
 
   // Physics and movement
   React.useEffect(() => {
@@ -241,7 +199,7 @@ async function loadActualBatisseGLB(glbBase64: string): Promise<THREE.Group | nu
 }
 
 // ─── Three.js viewer ───
-function ThreeViewer({ model, meshUrl }: { model: THREE.Object3D | null; meshUrl?: string }) {
+function ThreeViewer({ model }: { model: THREE.Object3D | null }) {
   const mountRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -265,32 +223,6 @@ function ThreeViewer({ model, meshUrl }: { model: THREE.Object3D | null; meshUrl
     }
     
     scene.add(model)
-
-    // Load VELARIS mesh if URL provided
-    let gltfLoader: GLTFLoader | null = null
-    if (meshUrl) {
-      gltfLoader = new GLTFLoader()
-      gltfLoader.load(
-        meshUrl,
-        (gltf) => {
-          const mesh = gltf.scene
-          scene.add(mesh)
-          // Adjust camera to include both model and mesh
-          const combined = new THREE.Object3D()
-          combined.add(mesh, model)
-          const box = new THREE.Box3().setFromObject(combined)
-          const center = box.getCenter(new THREE.Vector3())
-          const size = box.getSize(new THREE.Vector3())
-          const dist = Math.max(size.x, size.y, size.z, 4) * 1.4
-          camera.position.set(center.x + dist, center.y + dist * 0.8, center.z + dist)
-          camera.lookAt(center)
-        },
-        undefined,
-        (error) => {
-          console.error('Failed to load VELARIS mesh:', error)
-        }
-      )
-    }
 
     const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000)
     const box = new THREE.Box3().setFromObject(model)
@@ -321,9 +253,6 @@ function ThreeViewer({ model, meshUrl }: { model: THREE.Object3D | null; meshUrl
       cancelAnimationFrame(raf)
       controls.dispose()
       scene.remove(model)
-      if (gltfLoader && meshUrl) {
-        scene.remove(gltf.scene)
-      }
       // Remove furniture from scene
       if (roomFurniture && roomFurniture.length > 0) {
         roomFurniture.forEach((furn: any) => {
@@ -333,7 +262,7 @@ function ThreeViewer({ model, meshUrl }: { model: THREE.Object3D | null; meshUrl
       renderer.dispose()
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement)
     }
-  }, [model, meshUrl, roomFurniture])
+  }, [model, roomFurniture])
 
   return <div ref={mountRef} style={{ width: '100%', height: 400, borderRadius: 8, overflow: 'hidden' }} />
 }
@@ -422,16 +351,15 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
     ;(async () => {
       try {
         setHomeConfig('loading')
-        // Get geometry for project
-        const projectId = 1
-        const data = await api(`/api/batisse/projects/${projectId}/geometry`)
+        // Get geometry for project 1
+        const data = await api('/api/batisse/projects/1/geometry')
         if (cancelled) return
         const roomList: any[] = data.rooms || []
 
         if (data.ready_for_3d && data.geometry) {
           try {
             // Export as GLB
-            const glb = await api(`/api/batisse/projects/${projectId}/geometry/export-glb`, { method: 'POST' })
+            const glb = await api('/api/batisse/projects/1/geometry/export-glb', { method: 'POST' })
             const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null
             if (cancelled) return
             if (loaded) {
@@ -630,75 +558,6 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
       .finally(() => setLoading(false))
   }
 
-  // WYA Wardrobe browsing
-  const browseWyaWardrobe = async () => {
-    try {
-      const wardrobe = await api("/api/wardrobe/browse", { method: "POST", body: JSON.stringify({ user_id: USER_ID }) })
-      if (wardrobe.items && wardrobe.items.length > 0) {
-        const itemsText = wardrobe.items
-          .slice(0, 5)
-          .map((item: any) => item.item_name ?? item.name ?? "Item")
-          .join(", ")
-        toast(`Wardrobe loaded with: ${itemsText}`)
-      } else {
-        toast("Wardrobe loaded")
-      }
-    } catch (error) {
-      toast("Failed to load wardrobe")
-      console.error("WARDROBE ERROR:", error)
-    }
-  }
-
-  // TryOn fitting studio
-  const tryOnGarment = async () => {
-    try {
-      const result = await api("/api/tryon/generate", {
-        method: "POST",
-        body: JSON.stringify({
-          garment_image_url: '/test.jpg',
-          avatar_params: { type: avatarType, primary: avatarColors.primary, secondary: avatarColors.secondary },
-          user_id: USER_ID,
-        }),
-      })
-      toast(`Try-on preview generated`)
-      // Display the result
-      if (result.image_url) {
-        toast(`TryOn result: ${result.image_url}`)
-      }
-    } catch (error) {
-      toast("Try-on failed")
-      console.error("TRYON ERROR:", error)
-    }
-  }
-
-  // VELARIS jewellery design
-  const generateJewelleryDesign = async () => {
-    try {
-      const result = await api("/api/jewellery/generate-design", {
-        method: "POST",
-        body: JSON.stringify({
-          jewelry_type: "ring",
-          gemstone: "diamond",
-          metal: "yellow gold",
-          carat: 1.0,
-          shape: "round",
-        }),
-      })
-      if (result.mesh_url) {
-        toast(`Jewellery design generated: ${result.description}`)
-        // Load the 3D mesh into the scene
-        const meshUrl = result.mesh_url
-        setLoadedMeshUrl(meshUrl)
-        setShowMesh(true)
-      } else {
-        toast(`Design generation failed: ${result.error || 'unknown error'}`)
-      }
-    } catch (error) {
-      toast("Jewellery design failed")
-      console.error("VELARIS ERROR:", error)
-    }
-  }
-
   return (
     <Card title="BATISSE — Floor Plan & 3D Home" color="#3b82f6" description="Upload a floor plan and explore your 3D dollhouse.">
       <small style={{ color: '#94a3b8' }}>
@@ -710,17 +569,16 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
         )}
       </small>
       <div style={{ margin: '1rem 0' }}>
-        {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} roomFurniture={roomFurniture} meshUrl={loadedMeshUrl} />}
-<LunaCompanion
+        {loading && !model ? <p style={{ color: '#64748b' }}>Loading…</p> : <ThreeViewer model={model} roomFurniture={roomFurniture} />}
+        <LunaCompanion
           playerPos={playerPos}
           playerPerspective={playerPerspective}
           lunaState={lunaState}
           setLunaState={setLunaState}
           toggleLunaFollowing={toggleLunaFollowing}
           setLunaExpression={setLunaExpression}
-          currentRoom={currentRoom}
         />
-        <InventoryPanel inventory={inventory} setInventory={setInventory} />
+        <ExteriorEnvironment />
       </div>
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
       {rooms.length > 0 && (
@@ -772,7 +630,7 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
   setLunaExpression: (expression: string) => void
   currentRoom: string | null
 }) {
-  // Luna's position follows the player
+  // Luna's position follows the player with lag
   const lunaPosition = React.useRef(new THREE.Vector3(playerPos.x, playerPos.y + 1, playerPos.z))
 
   // Update Luna's position to follow player
@@ -782,30 +640,18 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     lunaPosition.current.z = playerPos.z
   }, [playerPos.x, playerPos.y, playerPos.z])
 
-  // Update Luna state based on following toggled
+  // Luna expression state and room context
+  const expressions = ['idle', 'happy', 'thinking', 'walking']
+
+  // Cycle expressions periodically when following
   React.useEffect(() => {
-    if (lunaState === 'following') {
-      // Luna follows player - already handled by position update
-    }
+    const interval = setInterval(() => {
+      const currentIdx = expressions.indexOf(lunaState) || 0
+      const nextIdx = (currentIdx + 1) % expressions.length
+      setLunaExpression(expressions[nextIdx])
+    }, 3000)
+    return () => clearInterval(interval)
   }, [lunaState])
-
-  // Luna physical animation state
-  const animationState = React.useState<'idle' | 'walking' | 'turning'>('idle')[0]
-
-  // Update animation state based on player movement
-  React.useEffect(() => {
-    let lastPos = lunaPosition.current
-    const checkMovement = setInterval(() => {
-      const dist = Math.abs(lunaPosition.current.x - lastPos.x) + Math.abs(lunaPosition.current.z - lastPos.z)
-      if (dist > 0.1) {
-        animationState.value = 'walking'
-      } else {
-        animationState.value = 'idle'
-      }
-      lastPos = lunaPosition.current
-    }, 100)
-    return () => clearInterval(checkMovement)
-  }, [lunaPosition])
 
   // Room-aware greetings and assistance
   const getRoomGreeting = (roomName: string | null): string => {
@@ -848,19 +694,6 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     return () => clearTimeout(timeout)
   }, [currentRoom])
 
-  // Luna expressions
-  const expressions = ['idle', 'happy', 'thinking', 'walking']
-  const expressionIndex = expressions.indexOf(lunaState) || 0
-
-  // Change expression periodically when following
-  React.useEffect(() => {
-    const interval = setInterval(() => {
-      const nextIndex = (expressionIndex + 1) % expressions.length
-      setLunaExpression(expressions[nextIndex])
-    }, 3000)
-    return () => clearInterval(interval)
-  }, [lunaState])
-
   // Interaction: L key to call or interact with Luna
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -873,22 +706,22 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [currentRoom])
 
-  // Luna 3D model
+  // Luna 3D model - futuristic robot sphere with teal/orange accents
   const lunaMesh = React.useRef<THREE.Mesh | null>(null)
 
   React.useEffect(() => {
-    const geometry = new THREE.SphereGeometry(0.5, 16, 16)
-    const material = new THREE.MeshStandardMaterial({ color: 0x00ffcc })
+    const geometry = new THREE.SphereGeometry(0.4, 16, 16)
+    const material = new THREE.MeshStandardMaterial({ color: 0x00ccaa })
     lunaMesh.current = new THREE.Mesh(geometry, material)
     lunaMesh.current.position.copy(lunaPosition.current)
   }, [])
 
-  // Luna following behavior
+  // Luna following behavior with smoothing
   React.useEffect(() => {
     const animate = () => {
       if (lunaMesh.current) {
-        // Smooth follow with slight lag
-        lunaMesh.current.lerp(lunaPosition.current, 0.1)
+        // Smooth follow with lag - maintain comfortable distance
+        lunaMesh.current.position.lerp(lunaPosition.current, 0.1)
         // Turn toward player
         lunaMesh.current.lookAt(playerPos)
       }
@@ -897,14 +730,33 @@ function LunaCompanion({ playerPos, playerPerspective, lunaState, setLunaState, 
     animate()
   }, [lunaMesh, playerPos])
 
+  // Expression color changes based on state
+  React.useEffect(() => {
+    if (!lunaMesh.current) return
+    const material = lunaMesh.current.material as THREE.MeshStandardMaterial
+    switch (lunaState) {
+      case 'happy':
+        material.color.set(0x00ffcc) // bright teal
+        break
+      case 'thinking':
+        material.color.set(0x00aaff) // blue
+        break
+      case 'walking':
+        material.color.set(0x00ff88) // light green
+        break
+      default: // idle
+        material.color.set(0x00ccaa) // teal
+    }
+  }, [lunaState])
+
   return (
     <group ref={lunaMesh} style={{
       position: 'absolute',
-      width: 100,
-      height: 100,
+      width: 64,
+      height: 64,
       pointerEvents: 'none'
     }}>
-      {/* Luna is rendered via Three.js in the scene */}
+      {/* Luna companion - futuristic robot floating near player */}
     </group>
   )
 }
@@ -1207,7 +1059,7 @@ const navItems = [
 // ─── HUD ───
 function useHUD() {
   const [selectedSlot, setSelectedSlot] = React.useState(0)
-  const [inventory, setInventory] = React.useState<Array<string | null>>(Array(9).fill(null))
+  const [inventory, setInventory] = React.useState<Array<number | null>>(Array(9).fill(null))
   const [isPaused, setIsPaused] = React.useState(false)
 
   // Hotbar selection
@@ -1268,90 +1120,6 @@ function Hotbar({ selectedSlot: slot, inventory, setInventory }: { selectedSlot:
   )
 }
 
-// ─── Inventory System ───
-function InventoryPanel({ inventory, setInventory }: { inventory: Array<string | null>; setInventory: React.Dispatch<React.SetStateAction<Array<string | null>>> }) {
-  const [isOpen, setIsOpen] = React.useState(false)
-
-  const toggleInventory = () => setIsOpen(!isOpen)
-
-  const handleSlotSelect = (index: number) => {
-    setInventory(prev => {
-      const newInv = [...prev]
-      newInv[index] = newInv[index] === null ? 'selected' : null
-      return newInv
-    })
-  }
-
-  const inventoryItems: Array<{ name: string; description: string; category: string }> = [
-    { name: 'Wardrobe Access', description: 'Open wardrobe for outfit browsing', category: 'ORVYNE' },
-    { name: 'TryOn Kit', description: 'Virtual fitting room tools', category: 'ORVYNE' },
-    { name: 'Jewellery Design', description: 'VELARIS design tools', category: 'ORVYNE' },
-    { name: 'Home Settings', description: 'Personalised home configuration', category: 'ORVYNE' },
-    { name: 'Luna Preferences', description: 'Companion settings and state', category: 'ORVYNE' },
-    { name: 'Saved Designs', description: 'Stored jewellery designs', category: 'ORVYNE' },
-    { name: 'TryOn Results', description: 'Saved try-on generation results', category: 'ORVYNE' },
-    { name: 'Wardrobe Items', description: 'Browsed outfit items', category: 'ORVYNE' },
-    { name: 'Inventory Empty', description: 'Empty slot', category: 'ORVYNE' },
-  ]
-
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        top: 50,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        background: 'rgba(15, 23, 42, 0.9)',
-        border: '2px solid #3b82f6',
-        borderRadius: 12,
-        padding: '1rem',
-        width: 250,
-        maxHeight: 'calc(100vh - 100px)',
-        overflowY: 'auto',
-        zIndex: 20,
-        color: '#e0e7ff',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-        <span>Inventory</span>
-        <button onClick={toggleInventory} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '0.75rem' }}>
-          ✕
-        </button>
-      </div>
-      <div style={{ height: 'calc(100% - 1.5rem)', display: 'flex', flexDirection: 'column', gap: 0.5rem }}>
-        {inventoryItems.map((item, i) => {
-          const isSelected = inventory[i] !== null
-          const style = {
-            background: isSelected ? 'rgba(59, 130, 246, 0.2)' : 'rgba(15, 23, 42, 0.8)',
-            border: '1px solid #3b3d4e',
-            borderRadius: 6,
-            padding: '0.5rem',
-            cursor: 'pointer',
-            transition: 'background 0.2s',
-          }
-          const itemStyle = isSelected ? { color: '#e0e7ff' } : { color: '#94a3b8' }
-          return (
-            <div
-              key={i}
-              style={style}
-              onClick={() => handleSlotSelect(i)}
-            >
-              <div style={{ fontWeight: 500, marginBottom: 0.25rem }>{item.name}</div>
-              <div style={{ fontSize: '0.65rem', opacity: 0.8 }>{item.description}</div>
-            </div>
-          )
-        })}
-        {inventory.length < inventoryItems.length && (
-          <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', opacity: 0.5, color: '#475467' }}>
-            {inventory.length} of {inventoryItems.length} items
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 function PerspectiveIndicator({ perspective }: { perspective: 'first' | 'third' }) {
   return (
     <div
@@ -1378,8 +1146,6 @@ export default function App() {
   const [avatarType, setAvatarType] = useState<'human' | 'elf' | 'cat' | 'dog'>('human')
   const [avatarColors, setAvatarColors] = useState({ primary: 0x6c5ce7, secondary: 0xa29bfe })
   const [avatarProps, setAvatarProps] = useState({ type: 'human', primary: 0x6c5ce7, secondary: 0xa29bfe })
-  const [loadedMeshUrl, setLoadedMeshUrl] = useState<string | null>(null)
-  const [showMesh, setShowMesh] = useState(false)
 
   useEffect(() => {
     fetch(`${BASE_URL}/api/health`)

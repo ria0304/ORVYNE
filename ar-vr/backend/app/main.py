@@ -636,7 +636,7 @@ async def luna_get_state() -> Dict[str, Any]:
     """Get current Luna companion state from database."""
     db = get_db_session()
     try:
-        state = db.query(LunaState).filter_by(user_id=USER_ID).first()
+        state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
         if state:
             return {
                 "state": state.current_expression,
@@ -654,12 +654,11 @@ async def luna_toggle_following() -> Dict[str, Any]:
     """Toggle Luna following preference."""
     db = get_db_session()
     try:
-        state = db.query(LunaState).filter_by(user_id=USER_ID).first()
+        state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
         if state:
             state.is_following = not state.is_following
         else:
-            state = LunaState(user_id=USER_ID, is_following=True)
-            db.add(state)
+            state = LunaState(is_following=True)
         db.commit()
         return {"is_following": state.is_following}
     finally:
@@ -670,9 +669,9 @@ async def luna_set_expression(expression: str = Form(...)) -> Dict[str, Any]:
     """Set Luna's current expression."""
     db = get_db_session()
     try:
-        state = db.query(LunaState).filter_by(user_id=USER_ID).first()
+        state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
         if not state:
-            state = LunaState(user_id=USER_ID)
+            state = LunaState()
             db.add(state)
         state.current_expression = expression
         state.last_seen = func.now()

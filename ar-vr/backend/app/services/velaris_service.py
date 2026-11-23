@@ -188,7 +188,7 @@ class VelarisService:
             jewelry_type=jewelry_type,
             gemstone=gemstone,
             metal=metal,
-            carat=cart,
+            carat=carat,
             shape=shape,
             roughness=roughness,
             metal_roughness=metal_rough,

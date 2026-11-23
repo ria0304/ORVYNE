@@ -24,6 +24,15 @@ export interface ThreeViewerProps {
   weather: Weather
   lunaExpression: LunaExpression
   lunaFollowing: boolean
+  /** Current battery level (0-100). */
+  lunaBattery?: number
+  /** Current Luna state for HUD. */
+  lunaState?: {
+    isFollowing: boolean
+    speechActive: boolean
+    speechText: string
+    interactionStatus: string
+  }
   /** Fires whenever the in-world hour changes. */
   onHourChange?: (hour: number) => void
 }
@@ -71,6 +80,8 @@ export function ThreeViewer(props: ThreeViewerProps) {
 
     const luna = createLuna()
     scene.add(luna.mesh)
+    const lunaRef = { current: luna }
+    ;(window as any).__lunaRef = lunaRef
 
     const body = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.3, 1.0, 4, 12),
@@ -78,6 +89,10 @@ export function ThreeViewer(props: ThreeViewerProps) {
     )
     body.visible = false
     scene.add(body)
+
+    // Track player position for walking animation
+    let prevPlayerPos = new THREE.Vector3(live.current.playerRef.current.position.x, live.current.playerRef.current.position.y, live.current.playerRef.current.position.z)
+    let walkTimer = 0
 
     const camera = new THREE.PerspectiveCamera(60, width / VIEWER_HEIGHT, 0.1, 1000)
     const center = frameModel(camera, model)
@@ -179,8 +194,32 @@ export function ThreeViewer(props: ThreeViewerProps) {
         const pose = cameraPose(player, p.perspective)
         camera.position.copy(pose.position)
         camera.lookAt(pose.target)
+
+        // Detect walking - check if player input indicates movement
+        const input = p.inputRef.current
+        const speed = (input.forward || input.backward) ? 0.8 : (input.left || input.right) ? 0.4 : 0
+        const isWalking = speed > 0
+
+        // Walking animation
+        if (isWalking) {
+          walkTimer += dt * 4 // cycle faster for walking
+          luna.animateWalking(dt, speed * 0.3, walkTimer)
+        } else {
+          // Idle/standing
+          luna.animateIdle(dt, elapsed)
+        }
+
+        // Turn animation if player facing different direction
+        const playerYaw = player.yaw
+        const lunaYaw = luna.mesh.rotation.y
+        if (Math.abs(playerYaw - lunaYaw) > 0.02) {
+          luna.animateTurn(dt, lunaYaw, playerYaw, elapsed)
+        }
+
+        prevPlayerPos.copy(player.position)
       } else {
         controls.update()
+        luna.animateIdle(dt, elapsed)
       }
 
       body.visible = p.mode === 'walk' && p.perspective === 'third'
@@ -189,6 +228,11 @@ export function ThreeViewer(props: ThreeViewerProps) {
 
       luna.setExpression(p.lunaExpression)
       if (p.lunaFollowing) luna.follow(player, dt, elapsed)
+
+      // Battery simulation - drains slowly when active
+      if (luna.getBatteryDecayRate() > 0) {
+        luna.setBattery(luna.getBattery() - luna.getBatteryDecayRate() * dt)
+      }
 
       renderer.render(scene, camera)
     }

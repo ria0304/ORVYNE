@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { api, qs } from '../lib/api'
 import { expressionForHour, type LunaExpression, type Weather } from '../lib/environment'
+import { useLunaController } from '../hooks/useLunaController'
 import {
   buildFurnitureForRooms, createFurniture, disposeFurniture, nearestFurniture, restingY,
   type FurnitureItem,
@@ -14,6 +15,7 @@ import {
 import { Card, buttonStyle } from '../components/ui'
 import { ThreeViewer } from '../components/ThreeViewer'
 import { Hotbar, PerspectiveIndicator } from '../components/Hud'
+import { LunaHUD } from '../components/LunaHUD'
 import { LunaCompanion } from '../components/LunaCompanion'
 import type { AvatarProps } from '../components/AvatarCustomisation'
 import { useHUD } from '../hooks/useHUD'
@@ -42,6 +44,9 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
   const [lunaExpression, setLunaExpressionState] = useState<LunaExpression>('idle')
   const [lunaFollowing, setLunaFollowing] = useState(true)
   const [lunaAuto, setLunaAuto] = useState(true)
+
+  // Enhanced Luna controller - manages speech, commands, battery, HUD state
+  const { lunaState, setLunaState } = useLunaController()
 
   const hud = useHUD()
   const playerRef = useRef(createPlayer())
@@ -341,6 +346,8 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
             weather={weather}
             lunaExpression={lunaExpression}
             lunaFollowing={lunaFollowing}
+            lunaBattery={lunaState.battery}
+            lunaState={lunaState}
             onHourChange={onHourChange}
           />
         )}
@@ -376,6 +383,7 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
         onSetExpression={e => { setLunaAuto(false); setLunaExpression(e) }}
         onToggleAuto={() => setLunaAuto(a => !a)}
       />
+      <LunaHUD luna={lunaState} />
 
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
       {rooms.length > 0 && (

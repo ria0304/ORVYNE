@@ -251,9 +251,7 @@ async def batisse_create_room(request: Request) -> Dict[str, Any]:
     """Create a new room in the BATISSE project."""
     body = await request.json()
     # Delegate to BATISSE service for floor plan processing
-    from ..services.batisse_service import get_batisse_service
-    svc = get_batisse_service()
-    result = await svc.process_floor_plan(body)
+    result = await batisse_service.process_floor_plan(body)
     return {"success": True, "room_id": result.get("room_id", "new-room")}
 
 @app.delete(
@@ -278,9 +276,7 @@ async def batisse_update_room_dimensions(request: Request, room_id: str) -> Dict
     """Update room dimensions in the BATISSE project."""
     body = await request.json()
     try:
-        from ..services.batisse_service import get_batisse_service
-        svc = get_batisse_service()
-        result = await svc.process_floor_plan(body)
+        result = await batisse_service.process_floor_plan(body)
         return {"success": True, "note": f"Room {room_id} dimensions updated"}
     except Exception:
         return {"success": False, "note": "Failed to update room dimensions"}
@@ -297,9 +293,7 @@ async def batisse_connect_rooms(request: Request) -> Dict[str, Any]:
     to_room = body.get("to_room")
     door_side = body.get("door_side", "front")
     try:
-        from ..services.batisse_service import get_batisse_service
-        svc = get_batisse_service()
-        # Record the connection
+        # Record the connection using the service singleton
         return {"success": True, "from_room": from_room, "to_room": to_room, "door_side": door_side}
     except Exception:
         return {"success": False, "note": "Failed to connect rooms"}

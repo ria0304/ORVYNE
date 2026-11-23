@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict
+import jwt  # PyJWT for token validation
+from datetime import datetime, timezone
+from typing import Any, Dict, Generator
 from httpx import AsyncClient
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Request, HTTPException, Form
+from fastapi import FastAPI, Request, HTTPException, Form, Depends
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
@@ -24,6 +26,21 @@ from .schemas import IntegrationHealth  # noqa: F401
 from .services import batisse_service, wya_service, tryon_service, velaris_service  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
+    """Validate JWT token and return user_id."""
+    try:
+        payload = jwt.decode(token, config.INTEGRATION_JWT_SECRET, algorithms=["HS256"])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise jwt.PyJWTError("Token missing sub claim")
+        return user_id
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.PyJWTError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -53,9 +70,12 @@ async def lifespan(_: FastAPI):
         # Check BATISSE
         try:
             svc = get_batisse_service()
-            await svc.ping()
-            services_check["batisse"] = True
-            logger.info("BATISSE service reachable")
+            ping_result = await svc.ping()
+            services_check["batisse"] = ping_result
+            if ping_result:
+                logger.info("BATISSE service reachable")
+            else:
+                logger.warning("BATISSE service not reachable: ping returned False")
         except Exception as e:
             services_check["batisse"] = False
             logger.warning(f"BATISSE service not reachable: {e}")
@@ -63,18 +83,26 @@ async def lifespan(_: FastAPI):
         # Check WYA
         try:
             svc = get_wya_service()
-            await svc.ping()
-            services_check["wya"] = True
-            logger.info("WYA service reachable")
+            ping_result = await svc.ping()
+            services_check["wya"] = ping_result
+            if ping_result:
+                logger.info("WYA service reachable")
+            else:
+                logger.warning("WYA service not reachable: ping returned False")
         except Exception as e:
             services_check["wya"] = False
             logger.warning(f"WYA service not reachable: {e}")
 
         # Check TryOn
         try:
-            # tryon_svc is already initialized above
-            services_check["tryon"] = True
-            logger.info("TryOn service reachable")
+            from app.services.tryon_service import get_tryon_service
+            svc = get_tryon_service()
+            status = await svc.ping()
+            services_check["tryon"] = status
+            if status:
+                logger.info("TryOn service reachable")
+            else:
+                logger.warning("TryOn service not reachable: ping failed")
         except Exception as e:
             services_check["tryon"] = False
             logger.warning(f"TryOn service not reachable: {e}")
@@ -82,9 +110,12 @@ async def lifespan(_: FastAPI):
         # Check VELARIS
         try:
             svc = get_velaris_service()
-            await svc.ping()
-            services_check["velaris"] = True
-            logger.info("VELARIS service reachable")
+            ping_result = await svc.ping()
+            services_check["velaris"] = ping_result
+            if ping_result:
+                logger.info("VELARIS service reachable")
+            else:
+                logger.warning("VELARIS service not reachable: ping returned False")
         except Exception as e:
             services_check["velaris"] = False
             logger.warning(f"VELARIS service not reachable: {e}")
@@ -209,7 +240,8 @@ async def batisse_upload(request: Request) -> Dict[str, Any]:
 async def batisse_get_geometry(project_id: int) -> Dict[str, Any]:
     """Get validated geometry for a BATISSE project."""
     try:
-        result = await batisse_service.get_geometry(project_id)
+        svc = get_batisse_service()
+        result = await svc.get_geometry(project_id)
         return result
     except Exception:
         return {"success": False, "note": "BATISSE geometry backend unavailable"}
@@ -223,7 +255,8 @@ async def batisse_get_geometry(project_id: int) -> Dict[str, Any]:
 async def batisse_export_glb(project_id: int) -> Dict[str, Any]:
     """Export validated BATISSE geometry as GLB/glTF file."""
     try:
-        result = await batisse_service.export_glb(project_id)
+        svc = get_batisse_service()
+        result = await svc.export_glb(project_id)
         return result
     except Exception:
         return {"success": False, "note": "BATISSE GLB export backend unavailable"}
@@ -251,8 +284,9 @@ async def batisse_create_room(request: Request) -> Dict[str, Any]:
     """Create a new room in the BATISSE project."""
     body = await request.json()
     # Delegate to BATISSE service for floor plan processing
-    result = await batisse_service.process_floor_plan(body)
-    return {"success": True, "room_id": result.get("room_id", "new-room")}
+    svc = get_batisse_service()
+    result = await svc.process_floor_plan(body)
+    return result
 
 @app.delete(
     "/api/batisse/rooms/{room_id}",
@@ -262,8 +296,9 @@ async def batisse_create_room(request: Request) -> Dict[str, Any]:
 async def batisse_delete_room(request: Request, room_id: str) -> Dict[str, Any]:
     """Delete a room from the BATISSE project."""
     try:
-        # In production, this would call the BATISSE backend to remove the room
-        return {"success": True, "note": f"Room {room_id} deletion recorded"}
+        svc = get_batisse_service()
+        result = await svc.delete_room(room_id)
+        return result
     except Exception:
         return {"success": False, "note": "Failed to delete room"}
 
@@ -276,8 +311,9 @@ async def batisse_update_room_dimensions(request: Request, room_id: str) -> Dict
     """Update room dimensions in the BATISSE project."""
     body = await request.json()
     try:
-        result = await batisse_service.process_floor_plan(body)
-        return {"success": True, "note": f"Room {room_id} dimensions updated"}
+        svc = get_batisse_service()
+        result = await svc.update_room_dimensions(room_id, body)
+        return result
     except Exception:
         return {"success": False, "note": "Failed to update room dimensions"}
 
@@ -300,11 +336,9 @@ async def batisse_connect_rooms(request: Request) -> Dict[str, Any]:
 
 async def batisse_set_scale_reference(project_id: int) -> Dict[str, Any]:
     """Set scale reference (two points + real length) for BATISSE geometry."""
-    return {
-        "success": True,
-        "note": "Scale reference endpoint stub — Phase 1 placeholder",
-        "project_id": project_id,
-    }
+    svc = get_batisse_service()
+    result = await svc.set_scale_reference(project_id)
+    return result
 
 
 # ── Phase 2: Desktop Navigation ─────────────────────────────────────────────────
@@ -318,9 +352,15 @@ NavigationState = Dict[str, Any]
     tags=["navigation"],
     summary="Set user position in virtual home",
 )
-async def set_navigation_position(user_id: str, position: dict) -> Dict[str, Any]:
+async def set_navigation_position(
+    user_id: str,
+    position: dict,
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
     """Set user position (x, y, z) and rotation (x, y, z, w) in the virtual home."""
-    db = get_db_session()
+    # Use authenticated user ID, not URL parameter
+    user_id = auth_user_id
+    db = database.get_db_session()
     try:
         # Check if user exists
         user = db.query(Users).filter_by(user_id=user_id).first()
@@ -355,9 +395,15 @@ async def set_navigation_position(user_id: str, position: dict) -> Dict[str, Any
     tags=["navigation"],
     summary="Set current room for user",
 )
-async def set_current_room(user_id: str, room_id: str) -> Dict[str, Any]:
+async def set_current_room(
+    user_id: str,
+    room_id: str,
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
     """Set the current room the user is in."""
-    db = get_db_session()
+    # Use authenticated user ID, not URL parameter
+    user_id = auth_user_id
+    db = database.get_db_session()
     try:
         # Check if user exists
         user = db.query(Users).filter_by(user_id=user_id).first()
@@ -390,9 +436,46 @@ async def set_current_room(user_id: str, room_id: str) -> Dict[str, Any]:
     tags=["navigation"],
     summary="Get user position in virtual home",
 )
+async def get_navigation_position(
+    user_id: str,
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get current user position and rotation."""
+    # Use authenticated user ID, not URL parameter
+    user_id = auth_user_id
+    database.get_db_session()
+    try:
+        # Check for saved position
+        room_save = db.query(RoomSaves).filter_by(user_id=user_id).first()
+        if room_save and room_save.glb_model_path:
+            return {
+                "success": True,
+                "user_id": user_id,
+                "position": {"x": 0.0, "y": 1.6, "z": 0.0},
+                "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                "note": "Saved position from previous session.",
+            }
+        
+        # Default initial position
+        return {
+            "success": True,
+            "user_id": user_id,
+            "position": {"x": 0.0, "y": 1.6, "z": 0.0},
+            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+            "note": "Default initial position.",
+        }
+    finally:
+        db.close()
+
+
+@app.get(
+    "/api/navigation/get-position/{user_id}",
+    tags=["navigation"],
+    summary="Get user position in virtual home",
+)
 async def get_navigation_position(user_id: str) -> Dict[str, Any]:
     """Get current user position and rotation."""
-    db = get_db_session()
+    database.get_db_session()
     try:
         # Check for saved position
         room_save = db.query(RoomSaves).filter_by(user_id=user_id).first()
@@ -486,11 +569,15 @@ async def toggle_window(
     tags=["wardrobe"],
     summary="Browse user's wardrobe via WYA integration",
 )
-async def wardrobe_browse(user_id: str) -> Dict[str, Any]:
+async def wardrobe_browse(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
     """Browse the user's wardrobe via WYA integration."""
-    result = await wya_service.get_wardrobe(user_id)
+    from app.services.wya_service import get_wya_service
+    try:
+        svc = get_wya_service()
+        result = await svc.get_wardrobe(auth_user_id)
+    except Exception:
+        result = {"success": False, "note": "WYA backend unavailable"}
     return result
-
 
 @app.post(
     "/api/wardrobe/outfit-recommendations",
@@ -498,12 +585,17 @@ async def wardrobe_browse(user_id: str) -> Dict[str, Any]:
     summary="Get outfit recommendations from WYA AI",
 )
 async def wardrobe_outfit_recommendations(
-    user_id: str,
+    auth_user_id: str = Depends(get_current_user),
     occasion: str | None = None,
     weather: str | None = None,
 ) -> Dict[str, Any]:
     """Get AI-powered outfit recommendations from WYA."""
-    result = await wya_service.get_outfit_recommendations(user_id, occasion, weather)
+    from app.services.wya_service import get_wya_service
+    try:
+        svc = get_wya_service()
+        result = await svc.get_outfit_recommendations(auth_user_id, occasion, weather)
+    except Exception:
+        result = {"success": False, "note": "WYA backend unavailable"}
     return result
 
 
@@ -529,14 +621,17 @@ async def tryon_generate(
     tags=["tryon"],
     summary="Check TryOn pipeline readiness status",
 )
-async def tryon_status() -> Dict[str, Any]:
+async def tryon_status(user_id: str | None = None) -> Dict[str, Any]:
     """Check the TryOn pipeline readiness status."""
     # Check TryOn service status via the service adapter
     try:
         from app.services.tryon_service import get_tryon_service
         svc = get_tryon_service()
-        status = await svc.get_tryon_status()
-        return status
+        if user_id:
+            status = await svc.get_tryon_status(user_id)
+            return status
+        status = await svc.ping()
+        return {"status": "healthy" if status else "unhealthy", "pipeline": "image-based"}
     except Exception:
         return {"status": "unhealthy", "pipeline": "image-based", "initializing": True}
 
@@ -634,7 +729,7 @@ async def luna_chat(message: str, token: str, wardrobe_items: dict | None = None
 @app.get("/api/luna/state/get_state", tags=["luna"], summary="Get Luna state")
 async def luna_get_state() -> Dict[str, Any]:
     """Get current Luna companion state from database."""
-    db = get_db_session()
+    database.get_db_session()
     try:
         state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
         if state:
@@ -652,7 +747,7 @@ async def luna_get_state() -> Dict[str, Any]:
 @app.post("/api/luna/state/toggle_following", tags=["luna"], summary="Toggle Luna following")
 async def luna_toggle_following() -> Dict[str, Any]:
     """Toggle Luna following preference."""
-    db = get_db_session()
+    database.get_db_session()
     try:
         state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
         if state:
@@ -667,7 +762,7 @@ async def luna_toggle_following() -> Dict[str, Any]:
 @app.post("/api/luna/state/set_expression", tags=["luna"], summary="Set Luna expression")
 async def luna_set_expression(expression: str = Form(...)) -> Dict[str, Any]:
     """Set Luna's current expression."""
-    db = get_db_session()
+    database.get_db_session()
     try:
         state = db.query(LunaState).order_by(LunaState.last_seen.desc()).first()
         if not state:

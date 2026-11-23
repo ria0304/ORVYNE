@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { api, PROJECT_ID, qs, USER_ID } from '../lib/api'
+import { api, qs } from '../lib/api'
 import { expressionForHour, type LunaExpression, type Weather } from '../lib/environment'
 import {
   buildFurnitureForRooms, createFurniture, disposeFurniture, nearestFurniture, restingY,
@@ -102,13 +102,13 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
     setError(null)
     setHomeConfig('loading')
     try {
-      const data = await api(`/api/batisse/projects/${PROJECT_ID}/geometry`)
+      const data = await api(`/api/batisse/projects/${1}/geometry`)
       if (stale()) return
       const roomList: any[] = data?.rooms || []
 
       if (data?.ready_for_3d && data?.geometry) {
         try {
-          const glb = await api(`/api/batisse/projects/${PROJECT_ID}/geometry/export-glb`, { method: 'POST' })
+          const glb = await api(`/api/batisse/projects/${1}/geometry/export-glb`, { method: 'POST' })
           const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null
           if (stale()) return
           if (loaded) {

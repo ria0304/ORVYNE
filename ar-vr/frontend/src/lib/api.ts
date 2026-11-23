@@ -1,6 +1,4 @@
 export const BASE_URL: string = import.meta.env?.VITE_API_URL || 'http://127.0.0.1:8001'
-export const USER_ID = 'user-123'
-export const PROJECT_ID = 1
 
 const TOKEN_KEY = 'orvyne_token'
 
@@ -46,7 +44,6 @@ async function errorMessage(res: Response): Promise<string> {
 export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (!headers.has('Accept')) headers.set('Accept', 'application/json')
-  if (!headers.has('X-User-Id')) headers.set('X-User-Id', USER_ID)
   const token = getToken()
   if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`)
   const isForm = typeof FormData !== 'undefined' && init.body instanceof FormData

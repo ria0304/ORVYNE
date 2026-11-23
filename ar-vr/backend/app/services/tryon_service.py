@@ -97,9 +97,11 @@ class TryOnService:
         response.raise_for_status()
         return response.json()
 
-    async def get_tryon_status(self) -> Dict[str, Any]:
+    async def get_tryon_status(self, user_id: str) -> Dict[str, Any]:
         """Check TryOn pipeline readiness status."""
-        response = await self.client.get(f"{self.base_url}/api/tryon/status", headers={"X-User-Id": user_id})
+        response = await self.client.get(
+            f"{self.base_url}/api/tryon/status", headers={"X-User-Id": user_id}
+        )
         response.raise_for_status()
         return response.json()
 

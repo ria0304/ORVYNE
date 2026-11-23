@@ -118,8 +118,6 @@ class RoomSaves(Base):
     assigned_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        Index("ix_room_saves_user_id", "user_id"),
-        Index("ix_room_saves_room_id", "room_id"),
     )
 
 

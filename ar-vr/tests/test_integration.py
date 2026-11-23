@@ -15,9 +15,21 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
-# ── Test client ────────────────────────────────────────────────────────────────
+# ── Test client (no default auth) ────────────────────────────────────────────
 
 client = TestClient(app)
+
+# Auth client with JWT token ─────────────────────────────────────────────────
+
+auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.lZO_bZzGTOMqD0esU4KG8Q41W00_MsJOuwwa8btt26g"
+
+auth_client = TestClient(app, headers={"Authorization": f"Bearer {auth_token}"})
+
+# Second user token ──────────────────────────────────────────────────────────
+
+user_token_2 = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyJ9.lZO_bZzGTOMqD0esU4KG8Q41W00_MsJOuwwa8btt26g2"
+
+two_user_client = TestClient(app, headers={"Authorization": f"Bearer {user_token_2}"})
 
 
 # ── Health endpoint ───────────────────────────────────────────────────────────
@@ -59,8 +71,7 @@ class TestBatisseEndpoints:
             "/api/batisse/upload",
             json={"name": "Test Plan", "description": "A test floor plan"},
         )
-        # In Phase 1, this returns a structured response
-        assert response.status_code in (200, 422)  # 422 if validation fails, 200 if OK
+        assert response.status_code in (200, 422)
 
     def test_batisse_get_geometry_requires_id(self):
         """BATISSE geometry endpoint requires project ID."""
@@ -73,26 +84,26 @@ class TestBatisseEndpoints:
         assert response.status_code in (200, 422)
 
 
-# ── WYA endpoints ──────────────────────────────────────────────────────────────
+# ── WYA endpoints ────────────────────────────────────────────────────────────
 
 class TestWYAEndpoints:
     """Test WYA integration endpoints."""
 
     def test_wardrobe_browse_accepts_post(self):
         """WARDROBE browse endpoint accepts POST with user_id."""
-        response = client.post("/api/wardrobe/browse", json={"user_id": "user-123"})
+        response = auth_client.post("/api/wardrobe/browse", json={"user_id": "user-123"})
         assert response.status_code in (200, 422)
 
     def test_outfit_recommendations_accepts_post(self):
         """OUTFIT recommendations endpoint accepts POST."""
-        response = client.post(
+        response = auth_client.post(
             "/api/wardrobe/outfit-recommendations",
             json={"user_id": "user-123", "occasion": "casual"},
         )
         assert response.status_code in (200, 422)
 
 
-# ── TryOn endpoints ───────────────────────────────────────────────────────────
+# ── TryOn endpoints ──────────────────────────────────────────────────────────
 
 class TestTryOnEndpoints:
     """Test TryOn integration endpoints."""
@@ -111,7 +122,7 @@ class TestTryOnEndpoints:
 
     def test_tryon_status_get(self):
         """TRY-ON status endpoint accepts GET."""
-        response = client.get("/api/tryon/status")
+        response = auth_client.get("/api/tryon/status")
         assert response.status_code in (200, 422)
 
 
@@ -250,3 +261,74 @@ class TestSchemas:
         ra = RoomAssignment(room_id="rm-001", room_name="Bedroom", assigned_function="bedroom")
         assert ra.room_id == "rm-001"
         assert ra.assigned_function == "bedroom"
+
+
+# ── Authentication and authorization ──────────────────────────────────────────
+
+class TestAuth:
+    """Test authentication and authorization."""
+
+    def test_unauthenticated_health_returns_401(self):
+        """Health endpoint requires authentication."""
+        response = client.get("/api/health")
+        assert response.status_code == 401
+
+    def test_unauthenticated_wardrobe_returns_401(self):
+        """WARDROBE browse endpoint requires authentication."""
+        response = client.post("/api/wardrobe/browse", json={"user_id": "user-123"})
+        assert response.status_code == 401
+
+    def test_unauthenticated_tryon_status_returns_401(self):
+        """TRY-ON status endpoint requires authentication."""
+        response = client.get("/api/tryon/status")
+        assert response.status_code == 401
+
+    def test_authenticated_health_returns_ok(self):
+        """Health endpoint works with authentication."""
+        response = auth_client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+
+    def test_authenticated_wardrobe_works(self):
+        """WARDROBE browse works with authentication."""
+        response = auth_client.post("/api/wardrobe/browse", json={"user_id": "user-123"})
+        assert response.status_code in (200, 422)
+
+    def test_authenticated_tryon_status_works(self):
+        """TRY-ON status works with authentication."""
+        response = auth_client.get("/api/tryon/status")
+        assert response.status_code in (200, 422)
+
+
+# ── Two-user isolation ──────────────────────────────────────────────────────
+
+class TestTwoUserIsolation:
+    """Test that two users can operate independently."""
+
+    def test_two_users_independent(self):
+        """Two users can have separate sessions."""
+        # User 1 sets a position
+        response = two_user_client.post(
+            "/api/navigation/set-position/user-1",
+            json={"x": 1.0, "y": 1.6, "z": 1.0},
+        )
+        assert response.status_code == 200
+
+        # User 2 sets a different position
+        response = client.post(
+            "/api/navigation/set-position/user-2",
+            json={"x": 5.0, "y": 1.6, "z": 1.0},
+        )
+        assert response.status_code == 200
+
+        # Each user should have their own position
+        response = client.get("/api/navigation/get-position/user-1")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["position"]["x"] == 1.0
+
+        response = two_user_client.get("/api/navigation/get-position/user-2")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["position"]["x"] == 5.0

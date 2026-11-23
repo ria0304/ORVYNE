@@ -102,13 +102,13 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
     setError(null)
     setHomeConfig('loading')
     try {
-      const data = await api(`/api/batisse/projects/${1}/geometry`)
+      const data = await api(`/api/batisse/geometry`)
       if (stale()) return
       const roomList: any[] = data?.rooms || []
 
       if (data?.ready_for_3d && data?.geometry) {
         try {
-          const glb = await api(`/api/batisse/projects/${1}/geometry/export-glb`, { method: 'POST' })
+          const glb = await api(`/api/batisse/geometry/export-glb`, { method: 'POST' })
           const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null
           if (stale()) return
           if (loaded) {
@@ -154,13 +154,13 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
   // ── Actions ─────────────────────────────────────────────────────────────
   const handleRoomClick = (roomId: string) => {
     setCurrentRoom(roomId)
-    api(`/api/navigation/set-room/${USER_ID}/${roomId}`, { method: 'POST' })
+    api(`/api/navigation/set-room/default/${roomId}`, { method: 'POST' })
       .then(() => toast(`Moved to room ${roomId}`))
       .catch(() => toast('Navigation failed'))
   }
 
   const handleDoorInteraction = (roomId: string, doorSide: 'front' | 'back' | 'left' | 'right') => {
-    api(`/api/navigation/set-room/${USER_ID}/${roomId}`, { method: 'POST' })
+    api(`/api/navigation/set-room/default/${roomId}`, { method: 'POST' })
       .then(() => {
         setCurrentRoom(roomId)
         toast(`Moved to room ${roomId} via ${doorSide} door`)
@@ -186,7 +186,7 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
 
   const browseWyaWardrobe = async (): Promise<any | null> => {
     try {
-      const wardrobe = await api(`/api/wardrobe/browse${qs({ user_id: USER_ID })}`, { method: 'POST' })
+      const wardrobe = await api(`/api/wardrobe/browse${qs({ user_id: 'user-guest' })}`, { method: 'POST' })
       const items: any[] = wardrobe?.items ?? []
       toast(
         items.length
@@ -203,12 +203,12 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
 
   const tryOnGarment = async () => {
     try {
-      const wardrobe = await api(`/api/wardrobe/browse${qs({ user_id: USER_ID })}`, { method: 'POST' })
+      const wardrobe = await api(`/api/wardrobe/browse${qs({ user_id: 'user-guest' })}`, { method: 'POST' })
       const first = (wardrobe?.items ?? [])[0]
       const garmentImage: string = first?.image_url ?? first?.file_url ?? ''
       if (!garmentImage) return toast('No garments available for try-on')
       const result = await api(
-        `/api/tryon/generate${qs({ garment_image_url: garmentImage, user_id: USER_ID })}`,
+        `/api/tryon/generate${qs({ garment_image_url: garmentImage, user_id: 'user-guest' })}`,
         { method: 'POST', body: JSON.stringify(avatarProps) },
       )
       toast(result?.image_url ? `TryOn result: ${result.image_url}` : 'TryOn preview generated')

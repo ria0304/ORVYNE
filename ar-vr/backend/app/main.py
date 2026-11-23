@@ -237,9 +237,33 @@ async def batisse_upload(request: Request) -> Dict[str, Any]:
     tags=["batisse"],
     summary="Get validated geometry for a BATISSE project",
 )
-async def batisse_get_geometry(project_id: int) -> Dict[str, Any]:
+async def batisse_get_geometry(auth_user_id: str = Depends(get_current_user), project_id: int = ...) -> Dict[str, Any]:
     """Get validated geometry for a BATISSE project."""
+    # Resolve project_id from authenticated user's integration metadata
+    db = database.get_db_session()
     try:
+        meta = db.query(IntegrationMetadata).filter_by(user_id=auth_user_id).first()
+        if meta and meta.batisse_project_id:
+            project_id = meta.batisse_project_id
+        # If project_id was explicitly provided in URL, use it; otherwise use user's linked project
+        svc = get_batisse_service()
+        result = await svc.get_geometry(project_id)
+        return result
+    except Exception:
+        return {"success": False, "note": "BATISSE geometry backend unavailable"}
+
+
+@app.get(
+    "/api/batisse/geometry",
+    tags=["batisse"],
+    summary="Get validated geometry for authenticated user's BATISSE project",
+)
+async def batisse_get_geometry_default(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Get validated geometry for authenticated user's BATISSE project."""
+    db = database.get_db_session()
+    try:
+        meta = db.query(IntegrationMetadata).filter_by(user_id=auth_user_id).first()
+        project_id = meta.batisse_project_id if meta and meta.batisse_project_id else 1
         svc = get_batisse_service()
         result = await svc.get_geometry(project_id)
         return result
@@ -252,15 +276,37 @@ async def batisse_get_geometry(project_id: int) -> Dict[str, Any]:
     tags=["batisse"],
     summary="Export BATISSE geometry as GLB/glTF",
 )
-async def batisse_export_glb(project_id: int) -> Dict[str, Any]:
+async def batisse_export_glb(auth_user_id: str = Depends(get_current_user), project_id: int = ...) -> Dict[str, Any]:
     """Export validated BATISSE geometry as GLB/glTF file."""
+    # Resolve project_id from authenticated user's integration metadata
+    db = database.get_db_session()
     try:
+        meta = db.query(IntegrationMetadata).filter_by(user_id=auth_user_id).first()
+        if meta and meta.batisse_project_id:
+            project_id = meta.batisse_project_id
         svc = get_batisse_service()
         result = await svc.export_glb(project_id)
         return result
     except Exception:
         return {"success": False, "note": "BATISSE GLB export backend unavailable"}
 
+
+@app.post(
+    "/api/batisse/export-glb",
+    tags=["batisse"],
+    summary="Export authenticated user's BATISSE geometry as GLB/glTF",
+)
+async def batisse_export_glb_default(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Export authenticated user's BATISSE geometry as GLB/glTF file."""
+    db = database.get_db_session()
+    try:
+        meta = db.query(IntegrationMetadata).filter_by(user_id=auth_user_id).first()
+        project_id = meta.batisse_project_id if meta and meta.batisse_project_id else 1
+        svc = get_batisse_service()
+        result = await svc.export_glb(project_id)
+        return result
+    except Exception:
+        return {"success": False, "note": "BATISSE GLB export backend unavailable"}
 
 @app.post(
     "/api/batisse/projects/{project_id}/geometry/scale-reference",
@@ -363,13 +409,13 @@ async def set_navigation_position(
     db = database.get_db_session()
     try:
         # Check if user exists
-        user = db.query(Users).filter_by(user_id=user_id).first()
+        user = db.query(database.Users).filter_by(id=user_id).first()
         if not user:
-            user = Users(user_id=user_id, username=f"user_{user_id}")
+            user = database.Users(user_id=user_id, username=f"user_{user_id}")
             db.add(user)
         
         # Save position
-        room_saved = db.query(RoomSaves).filter_by(user_id=user_id).first()
+        room_saved = db.query(RoomSaves).filter_by(id=user_id).first()
         if not room_saved:
             room_saved = RoomSaves(user_id=user_id)
             db.add(room_saved)
@@ -406,9 +452,9 @@ async def set_current_room(
     db = database.get_db_session()
     try:
         # Check if user exists
-        user = db.query(Users).filter_by(user_id=user_id).first()
+        user = db.query(database.Users).filter_by(id=user_id).first()
         if not user:
-            user = Users(user_id=user_id, username=f"user_{user_id}")
+            user = database.Users(user_id=user_id, username=f"user_{user_id}")
             db.add(user)
         
         # Save room assignment
@@ -446,7 +492,7 @@ async def get_navigation_position(
     database.get_db_session()
     try:
         # Check for saved position
-        room_save = db.query(RoomSaves).filter_by(user_id=user_id).first()
+        room_save = db.query(RoomSaves).filter_by(id=user_id).first()
         if room_save and room_save.glb_model_path:
             return {
                 "success": True,
@@ -478,7 +524,7 @@ async def get_navigation_position(user_id: str) -> Dict[str, Any]:
     database.get_db_session()
     try:
         # Check for saved position
-        room_save = db.query(RoomSaves).filter_by(user_id=user_id).first()
+        room_save = db.query(RoomSaves).filter_by(id=user_id).first()
         if room_save and room_save.glb_model_path:
             return {
                 "success": True,

@@ -253,7 +253,7 @@ class VelarisService:
         size_scale = max(0.1, min(5.0, carat ** (1 / 3)))
 
         if jewelry_type == "ring":
-            torus = trimesh.creation.torus(R=0.4 * size_scale, r=0.12 * size_scale, segments=32)
+            torus = trimesh.creation.torus(major_radius=0.4 * size_scale, minor_radius=0.12 * size_scale, major_sections=32, minor_sections=32)
             torus.metadata["material"] = {
                 "metal": metal,
                 "roughness": roughness,

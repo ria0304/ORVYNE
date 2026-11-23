@@ -64,19 +64,19 @@ export function createLuna() {
   rightFoot.position.set(0.15, -1.1, 0.1)
 
   // Combine all parts into a robot body
-  const body = new THREE.Group()
-  body.name = 'luna'
-  body.add(chest)
-  body.add(head)
-  body.add(leftArm)
-  body.add(rightArm)
-  body.add(leftLeg)
-  body.add(rightLeg)
-  body.add(leftFoot)
-  body.add(rightFoot)
+  const mesh = new THREE.Group()
+  mesh.name = 'luna'
+  mesh.add(chest)
+  mesh.add(head)
+  mesh.add(leftArm)
+  mesh.add(rightArm)
+  mesh.add(leftLeg)
+  mesh.add(rightLeg)
+  mesh.add(leftFoot)
+  mesh.add(rightFoot)
 
   return {
-    mesh: body,
+    mesh: mesh,
     setExpression(e: LunaExpression) {
       const c = COLORS[e] ?? COLORS.idle
       material.color.setHex(c)
@@ -97,7 +97,9 @@ export function createLuna() {
       rightLeg.rotation.x = Math.cos(t * 0.5) * 0.2
     },
     dispose() {
-      mesh.geometry.dispose()
+      mesh.children.forEach((child: any) => {
+        if (child.geometry) child.geometry.dispose()
+      })
       material.dispose()
     },
   }

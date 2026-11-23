@@ -410,8 +410,60 @@ function BatissePage({ toast }: { toast: Notify }) {
   const [loading, setLoading] = useState(true)
   const [currentRoom, setCurrentRoom] = useState<string | null>(null)
   const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'error'>('none')
-  const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'error'>('none')
+
+
+  // API: Create new room
+  const createRoom = async (roomType: string) => {
+    const response = await api('/api/batisse/rooms', {
+      method: 'POST',
+      body: JSON.stringify({ type: roomType, name: roomType }),
+    })
+    if (response.success) {
+      setRooms(prev => [...prev, { room_id: response.room_id, room_name: roomType }])
+      setNewRoomType('living')
+      toast(\`Room added: \${roomType}\`)
+    }
+  }
+
+  // API: Delete room
+  const deleteRoom = async (roomId: string) => {
+    const response = await api(`/api/batisse/rooms/${roomId}`, {
+      method: 'DELETE',
+    })
+    if (response.success) {
+      setRooms(prev => prev.filter(r => r.room_id !== roomId))
+      setSelectedRoom(null)
+      setRoomEditMode(false)
+      toast('Room deleted')
+    }
+  }
+
+  // API: Update room dimensions
+  const updateRoomDimensions = async (roomId: string, dimensions: { width: number; depth: number; height: number }) => {
+    const response = await api(`/api/batisse/rooms/${roomId}/dimensions`, {
+      method: 'PUT',
+      body: JSON.stringify(dimensions),
+    })
+    if (response.success) {
+      toast('Room dimensions updated')
+    }
+  }
+
+  // API: Connect rooms with door
+  const connectRooms = async (fromRoom: string, toRoom: string, doorSide: 'front' | 'back' | 'left' | 'right') => {
+    const response = await api('/api/batisse/rooms/connect', {
+      method: 'POST',
+      body: JSON.stringify({ from_room: fromRoom, to_room: toRoom, door_side: doorSide }),
+    })
+    if (response.success) {
+      toast(\`Rooms connected via \${doorSide} door\`)
+    }
+  }
+
   const [roomFurniture, setRoomFurniture] = useState<any[]>([])
+  const [selectedRoom, setSelectedRoom] = useState<string | null>(null)
+  const [roomEditMode, setRoomEditMode] = useState(false)
+  const [newRoomType, setNewRoomType] = useState<'living' | 'bedroom' | 'kitchen' | 'bathroom' | 'wardrobe' | 'jewellery'>('living')
   const [homeGeometry, setHomeGeometry] = useState<any | null>(null)
   const [spawnPoint, setSpawnPoint] = React.useState(new THREE.Vector3(0, 1.6, 0))
 
@@ -513,6 +565,13 @@ const [playerPos, setPlayerPos] = React.useState(new THREE.Vector3(0, 1.6, 0))
         }
         // Geometry-derived fallback
         setHomeGeometry(createGeometryDerivedScene(roomList))
+        
+        // Convert roomList to rooms state for expansion features
+        const roomMap: any[] = []
+        roomList.forEach((room: any) => {
+          roomMap.push({ room_id: String(room.room_id ?? 0), room_name: (room.room_name ?? '').toLowerCase() || 'Room' })
+        })
+        setRooms(roomMap)
         setHomeConfig('generated')
 // Set room furniture based on room type
         const roomFurniture: any[] = []

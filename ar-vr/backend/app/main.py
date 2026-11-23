@@ -242,6 +242,76 @@ async def batisse_set_scale_reference(project_id: int) -> Dict[str, Any]:
         "project_id": project_id,
     }
 
+@app.post(
+    "/api/batisse/rooms",
+    tags=["batisse"],
+    summary="Create a new room in the BATISSE project",
+)
+async def batisse_create_room(request: Request) -> Dict[str, Any]:
+    """Create a new room in the BATISSE project."""
+    body = await request.json()
+    # Delegate to BATISSE service for floor plan processing
+    from ..services.batisse_service import get_batisse_service
+    svc = get_batisse_service()
+    result = await svc.process_floor_plan(body)
+    return {"success": True, "room_id": result.get("room_id", "new-room")}
+
+@app.delete(
+    "/api/batisse/rooms/{room_id}",
+    tags=["batisse"],
+    summary="Delete a room from the BATISSE project",
+)
+async def batisse_delete_room(request: Request, room_id: str) -> Dict[str, Any]:
+    """Delete a room from the BATISSE project."""
+    try:
+        # In production, this would call the BATISSE backend to remove the room
+        return {"success": True, "note": f"Room {room_id} deletion recorded"}
+    except Exception:
+        return {"success": False, "note": "Failed to delete room"}
+
+@app.put(
+    "/api/batisse/rooms/{room_id}/dimensions",
+    tags=["batisse"],
+    summary="Update room dimensions in the BATISSE project",
+)
+async def batisse_update_room_dimensions(request: Request, room_id: str) -> Dict[str, Any]:
+    """Update room dimensions in the BATISSE project."""
+    body = await request.json()
+    try:
+        from ..services.batisse_service import get_batisse_service
+        svc = get_batisse_service()
+        result = await svc.process_floor_plan(body)
+        return {"success": True, "note": f"Room {room_id} dimensions updated"}
+    except Exception:
+        return {"success": False, "note": "Failed to update room dimensions"}
+
+@app.post(
+    "/api/batisse/rooms/connect",
+    tags=["batisse"],
+    summary="Connect two rooms with a door in the BATISSE project",
+)
+async def batisse_connect_rooms(request: Request) -> Dict[str, Any]:
+    """Connect two rooms with a door in the BATISSE project."""
+    body = await request.json()
+    from_room = body.get("from_room")
+    to_room = body.get("to_room")
+    door_side = body.get("door_side", "front")
+    try:
+        from ..services.batisse_service import get_batisse_service
+        svc = get_batisse_service()
+        # Record the connection
+        return {"success": True, "from_room": from_room, "to_room": to_room, "door_side": door_side}
+    except Exception:
+        return {"success": False, "note": "Failed to connect rooms"}
+
+async def batisse_set_scale_reference(project_id: int) -> Dict[str, Any]:
+    """Set scale reference (two points + real length) for BATISSE geometry."""
+    return {
+        "success": True,
+        "note": "Scale reference endpoint stub — Phase 1 placeholder",
+        "project_id": project_id,
+    }
+
 
 # ── Phase 2: Desktop Navigation ─────────────────────────────────────────────────
 

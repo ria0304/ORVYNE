@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException, Form, Depends
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 
 from . import config
@@ -215,7 +216,9 @@ async def health() -> IntegrationHealth:
     finally:
         db.close()
 
-    return IntegrationHealth(services=services)
+    up = sum(1 for v in services.values() if v == "ok")
+    overall = "ok" if up == len(services) else ("down" if up == 0 else "degraded")
+    return IntegrationHealth(status=overall, services=services)
 
 
 # ── BATISSE — Floor plan to virtual home ──────────────────────────────────────
@@ -742,33 +745,44 @@ async def velaris_generate_3d_mesh(req: dict, auth_user_id: str = Depends(get_cu
 
 # ── Luna — AI fashion stylist chatbot ──────────────────────────────────────────
 
+class LunaChatBody(BaseModel):
+    """Request body for the gateway's Luna chat proxy."""
+    message: str = Field(min_length=1, max_length=2000)
+    intent: str = "outfit-help"            # WYA supports: outfit-help, gap-analysis
+    wya_token: str | None = None            # the user's WYA JWT (never sent in the URL)
+
+
 @app.post(
     "/api/luna/chat",
     tags=["luna"],
-    summary="Chat with Luna AI stylist",
+    summary="Chat with Luna AI stylist (proxied to WYA)",
 )
-async def luna_chat(message: str, token: str, wardrobe_items: dict | None = None) -> Dict[str, Any]:
-    """Chat with Luna AI stylist.
+async def luna_chat(body: LunaChatBody, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Proxy a Luna chat turn to WYA's /api/luna/chat.
 
-    Routes messages to WYA backend based on intent:
-    - outfit_suggestion: WYA outfit matching
-    - wardrobe_search: Search user's wardrobe
-    - gap_analysis: Identify wardrobe gaps
-    - style_explanation: Describe user's style
-    - general: Instant replies or LLM-based responses
+    The caller must be authenticated with an ORVYNE token. WYA keeps its own
+    authentication, so the user's WYA JWT is supplied in the body and
+    forwarded as a Bearer header. Downstream failures are returned as real
+    HTTP errors, never as a 200 with an error string.
     """
-    async with AsyncClient() as client:
-        try:
+    if not body.wya_token:
+        raise HTTPException(status_code=400, detail="wya_token is required: Luna styling uses the user's WYA account")
+    try:
+        async with AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 f"{config.WYA_BASE_URL}/api/luna/chat",
-                json={"message": message, "token": token, "wardrobe_items": wardrobe_items},
-                timeout=15.0,
+                json={"message": body.message, "intent": body.intent},
+                headers={"Authorization": f"Bearer {body.wya_token}"},
             )
-            response.raise_for_status()
-            data = response.json()
-            return {"reply": data.get("reply", ""), "intent": data.get("intent", ""), "data": data.get("data")}
-        except Exception as e:
-            return {"reply": f"Luna backend unavailable: {str(e)[:100]}", "intent": "error", "data": None}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"WYA unreachable: {str(e)[:100]}")
+    if response.status_code in (401, 403):
+        raise HTTPException(status_code=401, detail="WYA rejected the supplied token")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"WYA returned {response.status_code}")
+    data = response.json()
+    return {"reply": data.get("text", ""), "outfits": data.get("outfits"), "gap_analysis": data.get("gapAnalysis")}
+
 
 # ── Luna state ───────────────────────────────────────────────────────────
 

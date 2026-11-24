@@ -24,6 +24,8 @@ text-based type extraction that already exists in design.py. Nothing
 breaks if this module was never trained.
 """
 
+from __future__ import annotations
+
 import base64
 import io
 import json

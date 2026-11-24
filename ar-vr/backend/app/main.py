@@ -805,9 +805,11 @@ async def luna_toggle_following(auth_user_id: str = Depends(get_current_user)) -
     try:
         state = db.query(database.LunaState).filter_by(user_id=auth_user_id).first()
         if state:
+            # Toggle existing state
             state.is_following = not state.is_following
         else:
-            state = database.LunaState(user_id=auth_user_id, is_following=True)
+            # For new users: default is True, toggle to False
+            state = database.LunaState(user_id=auth_user_id, is_following=False)
             db.add(state)
         db.commit()
         return {"is_following": state.is_following}

@@ -192,14 +192,15 @@ class TestSecurityTests:
 
     def test_no_query_param_user_id_injection(self):
         """User ID cannot be overridden via query parameter."""
-        # Even if we pass ?user_id=, it should use the JWT-derived ID
+        # Set user A's state to a unique value to detect if user B is exposed
+        client_a.post('/api/luna/state/set_state', json={'state': 'user_a_unique_state'})
+        
+        # Even if we pass ?user_id=user-b, it should use the JWT-derived ID (user A)
         response = client_a.get("/api/luna/state/get_state?user_id=user-b")
-        # Should still work, returning user A's state
         assert response.status_code == 200
-        # The returned data should be for user A, not user B
         data = response.json()
-        # User A's data should not have User B's values
-        assert data["state"] != "" or data["state"] == "idle"  # Not User B's potentially different state
+        # Must return user A's state (not user B's or default)
+        assert data["state"] == "user_a_unique_state"
 
     def test_cors_does_not_allow_invalid_origins(self):
         """CORS rejects requests from unauthorized origins."""

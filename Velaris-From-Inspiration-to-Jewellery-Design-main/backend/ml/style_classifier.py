@@ -20,6 +20,8 @@ Fails soft exactly like type_classifier.py: no checkpoint / no torch ->
 `available = False`, callers should treat style as unknown rather than error.
 """
 
+from __future__ import annotations
+
 import base64
 import io
 import json

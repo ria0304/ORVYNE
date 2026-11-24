@@ -47,3 +47,33 @@ def test_mesh_requires_auth():
 def test_health_reports_unreachable_not_ok_when_services_down():
     r = TestClient(app).get("/api/health").json()
     assert set(r["services"]) == {"batisse", "wya", "tryon", "velaris"}
+
+
+# ── Health + Luna chat contract ───────────────────────────────────────────────
+
+def test_health_status_degraded_or_down_when_services_missing():
+    body = TestClient(app).get("/api/health").json()
+    ok = [v for v in body["services"].values() if v == "ok"]
+    if len(ok) == len(body["services"]):
+        assert body["status"] == "ok"
+    else:
+        assert body["status"] in ("degraded", "down")
+
+
+def test_luna_chat_requires_auth():
+    r = TestClient(app).post("/api/luna/chat", json={"message": "hi", "wya_token": "x"})
+    assert r.status_code == 401
+
+
+def test_luna_chat_rejects_token_in_query_and_missing_wya_token():
+    c = _client()
+    # token in the URL is ignored; without a body wya_token the request is refused
+    r = c.post("/api/luna/chat?token=secret", json={"message": "hi"})
+    assert r.status_code == 400
+
+
+def test_luna_chat_wya_down_is_502_not_200(monkeypatch):
+    from app import config as cfg
+    monkeypatch.setattr(cfg, "WYA_BASE_URL", "http://127.0.0.1:9")  # nothing listens here
+    r = _client().post("/api/luna/chat", json={"message": "hi", "wya_token": "t"})
+    assert r.status_code == 502

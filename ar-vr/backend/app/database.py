@@ -65,8 +65,6 @@ class IntegrationMetadata(BaseModelMixin, Base):
     user_id = Column(String(255), unique=True, index=True, nullable=False)  # Central user identifier
     batisse_project_id = Column(Integer, nullable=True, index=True)  # Linked BATISSE project
     room_assignments = Column(JSON, nullable=True, default=dict)  # room_id → function mapping
-    __tablename__ = "integration_metadata"
-
     __table_args__ = (
         Index("ix_metadata_user_id", "user_id"),
     )
@@ -217,19 +215,30 @@ class FurnitureSaves(BaseModelMixin, Base):
 
 # ── Engine helpers ────────────────────────────────────────────────────────────
 
+_schema_ready = False
+
+
 def init_db() -> None:
     """Initialize the database — create all tables if they don't exist."""
+    global _schema_ready
     Base.metadata.create_all(bind=engine)
+    _schema_ready = True
 
 
 def get_db_session() -> Session:
-    """Get a new database session for the integration layer."""
+    """Get a new database session for the integration layer.
+
+    Guarantees the schema exists even when the FastAPI lifespan has not run
+    (e.g. TestClient used without a context manager, scripts, workers).
+    """
+    if not _schema_ready:
+        init_db()
     return SessionLocal()
 
 
 def get_db() -> Generator[Session, None, None]:
     """Dependency injector that yields a DB session and ensures cleanup."""
-    db = SessionLocal()
+    db = get_db_session()
     try:
         yield db
     finally:

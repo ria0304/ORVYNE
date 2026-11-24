@@ -53,6 +53,16 @@ GEMS = {
 }
 
 
+METAL_COLORS: Dict[str, tuple] = {
+    "yellow gold": (255, 200, 60, 255),
+    "white gold": (230, 230, 235, 255),
+    "rose gold": (232, 160, 140, 255),
+    "platinum": (225, 228, 232, 255),
+    "silver": (205, 208, 214, 255),
+    "sterling silver": (205, 208, 214, 255),
+}
+
+
 def metal_roughness(req: Dict[str, Any]) -> tuple[float, float]:
     mn = (req.get("metal") or "yellow gold").lower()
     return METAL_ROUGHNESS.get(mn, METAL_ROUGHNESS["yellow gold"])
@@ -84,9 +94,11 @@ class VelarisService:
         """Check if VELARIS backend is reachable."""
         try:
             if self.client is None:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    await client.get(f"{self.base_url}/api/health")
-            return True
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"{self.base_url}/api/health")
+            else:
+                response = await self.client.get(f"{self.base_url}/api/health")
+            return response.status_code < 500
         except Exception:
             return False
 
@@ -164,11 +176,15 @@ class VelarisService:
 
     async def generate_3d_mesh(self, design_req: Dict[str, Any]) -> Dict[str, Any]:
         """Generate a 3D jewellery mesh via VELARIS rendering pipeline."""
-        # First, generate the 2D design via the existing endpoint to get specs
-        try:
-            design = await self.generate_design(design_req)
-        except Exception as e:
-            return {"error": f"Design generation failed: {str(e)[:100]}"}
+        # Only call the (LLM-backed) design endpoint when the caller has not
+        # already supplied the jewellery type. Fully specified requests build
+        # geometry locally and do not depend on a remote model being available.
+        design: Dict[str, Any] = {}
+        if not design_req.get("jewelry_type"):
+            try:
+                design = await self.generate_design(design_req)
+            except Exception as e:
+                return {"error": f"Design generation failed: {str(e)[:100]}", "status_code": 502}
 
         # Extract design parameters with validation
         gemstone = (design_req.get("gemstone") or design.get("gemstone") or "diamond").lower()
@@ -182,10 +198,11 @@ class VelarisService:
         if jewelry_type not in valid_types:
             return {
                 "error": f"Invalid jewelry_type: {jewelry_type}. Must be one of: {', '.join(valid_types)}",
+                "status_code": 422,
             }
 
         # Build PBR material parameters
-        roughness, metal_rough = metal_roughness({"metal": metal})
+        roughness, _metal_rough = metal_roughness({"metal": metal})
         gs = gem_spec({"gemstone": gemstone})
 
         # Generate triangle mesh based on jewellery type
@@ -196,7 +213,6 @@ class VelarisService:
             carat=carat,
             shape=shape,
             roughness=roughness,
-            metal_roughness=metal_rough,
             gem_color=gs["color"],
             gem_roughness=gs["roughness"],
         )
@@ -205,26 +221,29 @@ class VelarisService:
         try:
             scene = trimesh.Scene(mesh_data)
 
-            # Check trimesh version for dump_gltf API
-            gltf_output = scene.dump_gltf()
+            # A successful response must contain real, finite geometry.
+            geoms = list(scene.geometry.values())
+            if not geoms or any(len(g.faces) == 0 or len(g.vertices) == 0 for g in geoms):
+                return {"error": "Mesh generation produced empty geometry", "status_code": 502}
+            if any(not np.isfinite(g.vertices).all() for g in geoms):
+                return {"error": "Mesh generation produced non-finite vertices", "status_code": 502}
 
-            # Handle different return types from dump_gltf
-            if isinstance(gltf_output, bytes):
-                gltf_base64 = base64.b64encode(gltf_output).decode("utf-8")
-            elif isinstance(gltf_output, str):
-                gltf_base64 = base64.b64encode(gltf_output.encode("utf-8")).decode("utf-8")
-            else:
-                # dump_gltf may return a dict or other format; serialize it
-                gltf_bytes = json.dumps(gltf_output).encode("utf-8")
-                gltf_base64 = base64.b64encode(gltf_bytes).decode("utf-8")
+            # Binary glTF (GLB) is the interchange format three.js loads natively.
+            glb = scene.export(file_type="glb")
+            if not isinstance(glb, (bytes, bytearray)) or len(glb) < 20 or bytes(glb[:4]) != b"glTF":
+                return {"error": "Mesh export did not produce a valid GLB", "status_code": 502}
+            glb_base64 = base64.b64encode(bytes(glb)).decode("utf-8")
 
             return {
-                "mesh_url": f"data:application/gltf+json;base64,{gltf_base64}",
-                "format": "gltf",
+                "mesh_url": f"data:model/gltf-binary;base64,{glb_base64}",
+                "format": "glb",
+                "watertight": bool(all(g.is_watertight for g in geoms)),
+                "vertex_count": int(sum(len(g.vertices) for g in geoms)),
+                "face_count": int(sum(len(g.faces) for g in geoms)),
                 "description": f"3D jewellery mesh ({jewelry_type}, {gemstone}, {metal}, {carat}ct)",
             }
         except Exception as e:
-            return {"error": f"Mesh generation failed: {str(e)[:100]}"}
+            return {"error": f"Mesh generation failed: {str(e)[:100]}", "status_code": 500}
 
     @staticmethod
     def _validate_carat(carat: Any) -> float:
@@ -247,188 +266,88 @@ class VelarisService:
         shape: str,
         roughness: float,
         gem_roughness: float,
-        gem_color: tuple[int, int, int],
+        gem_color: tuple,
     ) -> trimesh.Trimesh:
-        """Build a parametric 3D jewellery mesh using trimesh."""
-        size_scale = max(0.1, min(5.0, carat ** (1 / 3)))
+        """Build a parametric, watertight 3D jewellery mesh with trimesh.
+
+        Every piece is a union of closed primitives (tori, spheres, prisms), so
+        the result is a valid manifold mesh: a metal body plus a gemstone,
+        each carrying its own face colour. Units are arbitrary but consistent
+        (roughly centimetres); the viewer is expected to scale to fit.
+        """
+        s = max(0.1, min(5.0, carat ** (1 / 3)))  # gem scale from carat
+        metal_rgba = METAL_COLORS.get(metal, METAL_COLORS["yellow gold"])
+        gem_rgba = tuple(int(c) for c in gem_color[:3]) + (255,)
+
+        def paint(mesh: trimesh.Trimesh, rgba) -> trimesh.Trimesh:
+            mesh.visual.face_colors = np.tile(np.array(rgba, dtype=np.uint8), (len(mesh.faces), 1))
+            return mesh
+
+        def gem_at(position, scale: float) -> trimesh.Trimesh:
+            """Gemstone body; faceting style follows the requested cut."""
+            if shape in ("round", "brilliant", "oval", "pear", "cabochon") or gemstone == "pearl":
+                gem = trimesh.creation.icosphere(subdivisions=2, radius=1.0)
+                if shape == "oval":
+                    gem.apply_scale([1.0, 0.75, 0.8])
+                elif shape == "pear":
+                    gem.apply_scale([0.8, 1.15, 0.8])
+            elif shape in ("square", "princess", "cushion", "emerald", "baguette"):
+                gem = trimesh.creation.box(extents=[1.5, 1.5, 1.1])
+            else:
+                gem = trimesh.creation.icosphere(subdivisions=1, radius=1.0)
+            gem.apply_scale(scale)
+            gem.apply_translation(position)
+            return paint(gem, gem_rgba)
+
+        def band(major: float, minor: float, rotate_x: bool = False) -> trimesh.Trimesh:
+            t = trimesh.creation.torus(major_radius=major, minor_radius=minor,
+                                       major_sections=64, minor_sections=24)
+            if rotate_x:
+                t.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+            return paint(t, metal_rgba)
+
+        parts: List[trimesh.Trimesh] = []
+        gem_scale = 0.18 * s
 
         if jewelry_type == "ring":
-            torus = trimesh.creation.torus(major_radius=0.4 * size_scale, minor_radius=0.12 * size_scale, major_sections=32, minor_sections=32)
-            torus.metadata["material"] = {
-                "metal": metal,
-                "roughness": roughness,
-                "gemstone": gemstone,
-            }
-            return torus
-
-        elif jewelry_type == "necklace" or jewelry_type == "pendant":
-            n = 20
-            # Generate vertices along a circle with height variation
-            vertices = []
-            for i in range(n):
-                theta = 2 * math.pi * i / n
-                r_outer = 0.3 * size_scale
-                x = r_outer * math.cos(theta)
-                y = r_outer * math.sin(theta)
-                z = 0.25 * size_scale * math.sin(3 * theta / 2)  # varied height for decorative effect
-                vertices.append((x, y, z))
-            # Build triangular faces - each triangle uses 3 consecutive vertices
-            faces = []
-            for i in range(n):
-                next_i = (i + 1) % n
-                # Triangle fan around center: each face uses vertex i, next_i, and center vertex at index 2n
-                faces.append([i, next_i, 2 * n])
-                # Side face: each side uses vertex i, next_i, i+n (but we don't have i+n, so use center)
-                # Actually, let's build a proper mesh: a ring of triangles around the perimeter
-            # Build a proper closed ring mesh
-            # Add center top and bottom vertices
-            center_top = (0, 0, max(v[2] for v in vertices) + 0.1)
-            center_bottom = (0, 0, min(v[2] for v in vertices) - 0.1)
-            all_vertices = vertices + [center_top, center_bottom]
-            # Rebuild faces
-            faces = []
-            # Triangles from top center to each edge
-            for i in range(n):
-                next_i = (i + 1) % n
-                faces.append([2 * n, i, next_i])  # top center
-            # Triangles from bottom center to each edge
-            for i in range(n):
-                next_i = (i + 1) % n
-                faces.append([2 * n + 1, next_i + n, i + n])  # bottom center - careful with indexing
-            # Actually, let's simplify: just make a flat ring without center caps
-            # Use only the perimeter vertices
-            num_vertices = len(vertices)  # = n
-            # Create triangular faces around the perimeter
-            faces = []
-            for i in range(n):
-                next_i = (i + 1) % n
-                faces.append([i, next_i, n + i])  # triangle using three consecutive vertices
-                faces.append([i, next_i, 2 * n - 1 - i])  # another triangle winding
-            # Wait, this is getting confusing. Let me use a cleaner approach.
-            # Let's just make a simple flat ring with n vertices and n faces
-            # Each face is a triangle: vertex i, vertex i+1, and a central vertex
-            # But we don't have a central vertex. Let's add one.
-            # Actually, the simplest approach: create a ring of vertices and triangulate
-            # Let me use a different well-known approach for a pendant/necklace mesh
-
-            # Clean approach: n perimeter vertices + 1 center top + 1 center bottom
-            # Perimeter vertices at z=0
-            perimeter_vertices = []
-            for i in range(n):
-                theta = 2 * math.pi * i / n
-                r = 0.3 * size_scale
-                x = r * math.cos(theta)
-                y = r * math.sin(theta)
-                perimeter_vertices.append((x, y, 0))
-
-            # Add top and bottom center vertices
-            all_vertices = perimeter_vertices + [(0, 0, 0.3 * size_scale), (0, 0, -0.3 * size_scale)]
-
-            # Build faces: top pyramids and bottom pyramids
-            faces = []
-            # Top triangles: center top + each edge
-            for i in range(n):
-                next_i = (i + 1) % n
-                faces.append([n, i, next_i])  # top center + two perimeter vertices
-            # Bottom triangles: center bottom + each edge (in reverse order)
-            for i in range(n):
-                next_i = (i + 1) % n
-                # Perimeter indices: i and next_i are at positions i and i+1 in [0..n-1]
-                # Bottom center is at index 2n+1
-                faces.append([n + 1, next_i + n, i + n])  # wait, next_i + n doesn't make sense
-                # Let me just use simple indices
-                # Perimeter: 0..n-1, Top center: n, Bottom center: n+1
-                faces.append([n + 1, i, next_i])  # bottom center + two perimeter vertices
-
-            mesh = trimesh.Trimesh(
-                vertices=np.array(all_vertices),
-                faces=np.array(faces),
-            )
-            mesh.metadata["material"] = {
-                "metal": metal,
-                "roughness": roughness,
-                "gemstone": gemstone,
-            }
-            return mesh
-
-        elif jewelry_type == "earrings":
-            # Simple stud earrings: hexagonal prism
-            hex_verts = []
-            for i in range(6):
-                a = 2 * math.pi * i / 6
-                hex_verts.append((0.1 * size_scale * math.cos(a), 0.1 * size_scale * math.sin(a), 0))
-            hex_verts.append((0, 0, 0.3 * size_scale))  # top center
-            # Build faces: 6 triangles around the hexagon
-            hex_faces = [[6, i, (i + 1) % 6] for i in range(6)]
-            mesh = trimesh.Trimesh(
-                vertices=np.array(hex_verts),
-                faces=np.array(hex_faces),
-            )
-            mesh.metadata["material"] = {
-                "metal": metal,
-                "roughness": roughness,
-                "gemstone": gemstone,
-            }
-            return mesh
-
+            major, minor = 0.95, 0.12                      # ~19 mm inner diameter band
+            parts.append(band(major, minor, rotate_x=True))  # band in the XZ plane, axis along Y
+            parts.append(gem_at([0.0, 0.0, major + minor + gem_scale * 0.6], gem_scale * 1.8))
+            # claw/bezel seat
+            seat = trimesh.creation.cylinder(radius=gem_scale * 1.5, height=0.1, sections=24)
+            seat.apply_translation([0.0, 0.0, major + minor * 0.8])
+            parts.append(paint(seat, metal_rgba))
         elif jewelry_type == "bracelet":
-            inner_radius = 0.3 * size_scale
-            outer_radius = 0.4 * size_scale
-            height = 0.15 * size_scale
-            n = 32
-            vertices = []
-            for i in range(n):
-                theta = 2 * math.pi * i / n
-                x = math.cos(theta) * outer_radius
-                y = math.sin(theta) * outer_radius
-                vertices.append((x, y, 0))
-                vertices.append((x, y, height))
-            # Build quad faces around the bracelet
-            faces = []
-            for i in range(n):
-                i2 = (i + 1) % n
-                # Four vertices per quad: bottom i, bottom i2, top i2, top i
-                faces.append([i, i2, i2 + n, i + n])
-            # Build triangular end caps
-            # Inner cap
-            inner_faces = []
-            for i in range(n):
-                next_i = (i + 1) % n
-                inner_faces.append([i, next_i, next_i + n, i + n])  # actually this is a quad
-                # Triangulate: [i, next_i, i+n] and [next_i, next_i+n, i+n]
-                inner_faces.append([i, next_i, i + n])
-                inner_faces.append([next_i, next_i + n, i + n])
-            # Outer cap
-            outer_faces = []
-            for i in range(n):
-                next_i = (i + 1) % n
-                outer_faces.append([i, next_i, i2 + n])  # this is wrong
-                # Triangulate: [i, next_i, i+n] and [next_i, next_i+n, i+n] but with outer indices
-                outer_faces.append([i, next_i, i + n])
-                outer_faces.append([next_i, next_i + n, i + n])
+            parts.append(band(3.2, 0.14, rotate_x=True))
+            parts.append(gem_at([0.0, 0.0, 3.2 + 0.14 + gem_scale], gem_scale * 2.0))
+        elif jewelry_type == "necklace":
+            chain = band(7.0, 0.04, rotate_x=True)
+            parts.append(chain)
+            parts.append(gem_at([0.0, 0.0, -7.0 - 0.1], gem_scale * 2.4))
+        elif jewelry_type == "pendant":
+            bail = band(0.22, 0.04)                          # hanging loop
+            bail.apply_translation([0.0, 0.0, 0.9])
+            parts.append(bail)
+            parts.append(gem_at([0.0, 0.0, 0.0], gem_scale * 3.0))
+        elif jewelry_type == "earrings":
+            for sign in (-1.0, 1.0):
+                x = sign * 1.2
+                parts.append(gem_at([x, 0.0, 0.0], gem_scale * 1.6))
+                post = trimesh.creation.cylinder(radius=0.04, height=0.8, sections=16)
+                post.apply_transform(trimesh.transformations.rotation_matrix(math.pi / 2, [1, 0, 0]))
+                post.apply_translation([x, -0.45, 0.0])
+                parts.append(paint(post, metal_rgba))
+        else:
+            parts.append(gem_at([0.0, 0.0, 0.0], gem_scale * 3.0))
 
-            # Simplify: just build the side quads and simple end caps
-            # Use only side quads for now - they form a complete tube
-            mesh = trimesh.Trimesh(
-                vertices=np.array(vertices),
-                faces=np.array(faces),
-            )
-            mesh.metadata["material"] = {
-                "metal": metal,
-                "roughness": roughness,
-                "gemstone": gemstone,
-            }
-            return mesh
-
-        # Default fallback: gemstone sphere
-        sphere = trimesh.creation.icosahedron(subdivisions=2)
-        sphere.apply_scale(max(0.1, min(5.0, carat ** (1 / 3))))
-        sphere.metadata["material"] = {
+        mesh = trimesh.util.concatenate(parts)
+        mesh.metadata["material"] = {
             "metal": metal,
             "roughness": roughness,
             "gemstone": gemstone,
+            "gem_roughness": gem_roughness,
         }
-        return sphere
+        return mesh
 
 
 # Singleton instance — created lazily

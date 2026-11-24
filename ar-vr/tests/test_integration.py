@@ -21,13 +21,13 @@ client = TestClient(app)
 
 # Auth client with JWT token ─────────────────────────────────────────────────
 
-auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6MTc5NTQ0ODg4MX0.RsqdGl9PGyJEo1qw23L9ZoI0ocG3tBQgllOfyboGj_Q"
+auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6MTc5NTUwMjIwMn0.579Ywt_8Tod6835WGSYiiAGuK8mMTqe3KLZAlhLjGoU"
 
 auth_client = TestClient(app, headers={"Authorization": f"Bearer {auth_token}"})
 
 # Second user token ──────────────────────────────────────────────────────────
 
-user_token_2 = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQ1NiIsImV4cCI6MTc5NTQ0OTQzNn0.JWhMBE9ZAu0_iWBHsenTIrTWhQ9ZIxSd8jl7mIjJUVg"
+user_token_2 = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQ1NiIsImV4cCI6MTc5NTUwMjIwMn0.4gxfVVZRBw7bsomrCtIREbU0sz-nbQBluOc1HHZKAG0"
 
 two_user_client = TestClient(app, headers={"Authorization": f"Bearer {user_token_2}"})
 
@@ -75,12 +75,12 @@ class TestBatisseEndpoints:
 
     def test_batisse_get_geometry_requires_id(self):
         """BATISSE geometry endpoint requires project ID."""
-        response = client.get("/api/batisse/geometry", headers={"Authorization": f"Bearer {auth_token}"})
+        response = auth_client.get("/api/batisse/geometry")
         assert response.status_code in (200, 422)
 
     def test_batisse_export_glb_requires_id(self):
         """BATISSE GLB export endpoint requires project ID."""
-        response = client.post("/api/batisse/export-glb", headers={"Authorization": f"Bearer {auth_token}"})
+        response = auth_client.post("/api/batisse/export-glb")
         assert response.status_code in (200, 422)
 
 
@@ -110,12 +110,11 @@ class TestTryOnEndpoints:
 
     def test_tryon_generate_accepts_post(self):
         """TRY-ON generate endpoint accepts POST."""
-        response = client.post(
+        response = auth_client.post(
             "/api/tryon/generate",
             json={
                 "garment_image_url": "http://example.com/garment.jpg",
                 "avatar_params": {"gender": "female"},
-                "user_id": "user-123",
             },
         )
         assert response.status_code in (200, 422)
@@ -157,7 +156,7 @@ class TestIntegrationEndpoints:
 
     def test_assign_room_function(self):
         """Room function assignment endpoint."""
-        response = client.post(
+        response = auth_client.post(
             "/api/integrate/assign-room-function",
             json={"room_id": "room-living-1", "function": "living_room"},
         )
@@ -169,7 +168,7 @@ class TestIntegrationEndpoints:
 
     def test_save_complete_look(self):
         """Save complete look endpoint."""
-        response = client.post(
+        response = auth_client.post(
             "/api/integrate/save-look",
             json={"look_id": "look-001", "clothing_items": ["Shirt"], "jewellery_item": "Ring"},
         )
@@ -280,8 +279,8 @@ class TestAuth:
 
     def test_unauthenticated_tryon_status_returns_401(self):
         """TRY-ON status endpoint requires authentication."""
-        response = auth_client.get("/api/tryon/status")
-        assert response.status_code in (200, 422)  # health doesn't require auth
+        response = client.get("/api/tryon/status")
+        assert response.status_code == 401
 
     def test_authenticated_health_returns_ok(self):
         """Health endpoint works with authentication."""

@@ -214,7 +214,7 @@ class TestVELARISIntegration:
     def test_generate_design_with_auth(self):
         """VELARIS design generation with valid auth."""
         response = client_a.post(
-            "/api/jewelleri/generate-design",
+            "/api/jewellery/generate-design",
             json={"prompt": "A simple ring", "inputType": "text", "style": "modern", "budget": "balanced"},
         )
         assert response.status_code in (200, 422, 503)

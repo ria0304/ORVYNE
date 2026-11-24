@@ -47,6 +47,8 @@ export function useLunaController() {
           battery: lunaState.battery,
           zone: lunaState.zone,
           interaction_status: lunaState.interactionStatus,
+          speech_active: lunaState.speechActive,
+          speech_text: lunaState.speechText,
         }),
       }).catch(() => {})
     }, 3000)

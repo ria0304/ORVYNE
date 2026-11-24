@@ -9,8 +9,10 @@ layer coordinates API communication without merging databases or business logic.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import time
 import jwt  # PyJWT for token validation
 from datetime import datetime, timezone
 from typing import Any, Dict, Generator
@@ -25,6 +27,10 @@ from . import config
 from . import database  # noqa: F401
 from .schemas import IntegrationHealth  # noqa: F401
 from .services import batisse_service, wya_service, tryon_service, velaris_service  # noqa: F401
+from .services.batisse_service import get_batisse_service
+from .services.wya_service import get_wya_service
+from .services.tryon_service import get_tryon_service
+from .services.velaris_service import get_velaris_service
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +236,8 @@ async def batisse_upload(
     """Delegate floor plan upload to BATISSE backend."""
     try:
         body = await request.json()
-        result = await batisse_service.process_floor_plan(body)
+        svc = get_batisse_service()
+        result = await svc.process_floor_plan(body)
         return result
     except Exception as e:
         logger.error(f"BATISSE upload failed: {e}")
@@ -460,7 +467,7 @@ async def get_navigation_position(
     """Get current user position and rotation."""
     # Use authenticated user ID, not URL parameter
     user_id = auth_user_id
-    database.get_db_session()
+    db = database.get_db_session()
     try:
         # Check for saved position
         room_save = db.query(database.RoomSaves).filter_by(id=user_id).first()
@@ -488,63 +495,100 @@ async def get_navigation_position(
 # ── Phase 2: Room Interactions ───────────────────────────────────────────────
 
 @app.post(
-    "/api/room/interact/{user_id}/{room_id}/{action}",
+    "/api/room/interact/{room_id}/{action}",
     tags=["room"],
     summary="Interact with a room object",
 )
 async def room_interact(
-    user_id: str,
     room_id: str,
     action: str,
+    auth_user_id: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Handle interaction with room objects (door, window, furniture)."""
-    return {
-        "success": True,
-        "user_id": user_id,
-        "room_id": room_id,
-        "action": action,
-        "note": f"Interaction '{action}' recorded for room {room_id}.",
-    }
+    db = database.get_db_session()
+    try:
+        user = db.query(database.Users).filter_by(id=auth_user_id).first()
+        if not user:
+            user = database.Users(id=auth_user_id)
+            db.add(user)
+        db.commit()
+        return {
+            "success": True,
+            "user_id": auth_user_id,
+            "room_id": room_id,
+            "action": action,
+            "note": f"Interaction '{action}' recorded for room {room_id}.",
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Room interaction failed: {str(e)[:100]}")
+    finally:
+        db.close()
 
 
 @app.post(
-    "/api/room/door/open/{user_id}/{from_room}/{to_room}",
+    "/api/room/door/open/{from_room}/{to_room}",
     tags=["room"],
     summary="Open a door to another room",
 )
 async def open_door(
-    user_id: str,
     from_room: str,
     to_room: str,
+    auth_user_id: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Handle door opening between rooms."""
-    return {
-        "success": True,
-        "user_id": user_id,
-        "from_room": from_room,
-        "to_room": to_room,
-        "note": f"Door opened from {from_room} to {to_room}.",
-    }
+    db = database.get_db_session()
+    try:
+        user = db.query(database.Users).filter_by(id=auth_user_id).first()
+        if not user:
+            user = database.Users(id=auth_user_id)
+            db.add(user)
+        # Record door connection
+        db.commit()
+        return {
+            "success": True,
+            "user_id": auth_user_id,
+            "from_room": from_room,
+            "to_room": to_room,
+            "note": f"Door opened from {from_room} to {to_room}.",
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Door open failed: {str(e)[:100]}")
+    finally:
+        db.close()
 
 
 @app.post(
-    "/api/room/window/toggle/{user_id}/{room_id}",
+    "/api/room/window/toggle/{room_id}",
     tags=["room"],
     summary="Toggle window visibility/state",
 )
 async def toggle_window(
-    user_id: str,
     room_id: str,
     is_open: bool = True,
+    auth_user_id: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Handle window state changes."""
-    return {
-        "success": True,
-        "user_id": user_id,
-        "room_id": room_id,
-        "is_open": is_open,
-        "note": f"Window state updated in room {room_id}.",
-    }
+    db = database.get_db_session()
+    try:
+        user = db.query(database.Users).filter_by(id=auth_user_id).first()
+        if not user:
+            user = database.Users(id=auth_user_id)
+            db.add(user)
+        db.commit()
+        return {
+            "success": True,
+            "user_id": auth_user_id,
+            "room_id": room_id,
+            "is_open": is_open,
+            "note": f"Window state updated in room {room_id}.",
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Window toggle failed: {str(e)[:100]}")
+    finally:
+        db.close()
 
 
 # ── WYA — Wardrobe integration ────────────────────────────────────────────────
@@ -592,13 +636,19 @@ async def wardrobe_outfit_recommendations(
     summary="Generate try-on preview for a garment",
 )
 async def tryon_generate(
-    garment_image_url: str,
-    avatar_params: dict,
-    user_id: str,
+    request: Request,
+    auth_user_id: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Generate a try-on preview using the TryOn pipeline."""
-    result = await tryon_service.generate_tryon(garment_image_url, avatar_params, user_id)
-    return result
+    body = await request.json()
+    garment_image_url = body.get("garment_image_url", "")
+    avatar_params = body.get("avatar_params", {})
+    svc = get_tryon_service()
+    try:
+        result = await svc.generate_tryon(garment_image_url, avatar_params, auth_user_id)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)[:100]}
 
 
 @app.get(
@@ -612,9 +662,6 @@ async def tryon_status(auth_user_id: str = Depends(get_current_user)) -> Dict[st
     try:
         from app.services.tryon_service import get_tryon_service
         svc = get_tryon_service()
-        if user_id:
-            status = await svc.get_tryon_status(user_id)
-            return status
         status = await svc.ping()
         return {"status": "healthy" if status else "unhealthy", "pipeline": "image-based"}
     except Exception:
@@ -836,6 +883,76 @@ async def luna_set_state(
         db.close()
 
 
+# ── Furniture persistence ─────────────────────────────────────────────────────
+
+@app.post(
+    "/api/furniture/save",
+    tags=["furniture"],
+    summary="Save a furniture placement for the user",
+)
+def furniture_save(
+    furniture: dict,
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Save a furniture placement (type, room_id, position, rotation)."""
+    db = database.get_db_session()
+    try:
+        save = database.FurnitureSaves(
+            user_id=auth_user_id,
+            furniture_id=furniture.get("furniture_id", f"furn-{int(time.time())}"),
+            furniture_type=furniture.get("furniture_type", ""),
+            room_id=furniture.get("room_id", "free"),
+            position_x=furniture.get("position_x", 0.0),
+            position_y=furniture.get("position_y", 0.0),
+            position_z=furniture.get("position_z", 0.0),
+            rotation_y=furniture.get("rotation_y", 0.0),
+            world_state=furniture.get("world_state", {}),
+        )
+        db.add(save)
+        db.commit()
+        return {"success": True, "furniture_id": save.furniture_id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save furniture: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@app.get(
+    "/api/furniture/restore",
+    tags=["furniture"],
+    summary="Restore all saved furniture placements for the user",
+)
+def furniture_restore(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Return all saved furniture placements for the user."""
+    db = database.get_db_session()
+    try:
+        saves = db.query(database.FurnitureSaves) \
+            .filter_by(user_id=auth_user_id) \
+            .order_by(database.FurnitureSaves.created_at.desc()) \
+            .all()
+        return {
+            "success": True,
+            "count": len(saves),
+            "furniture": [
+                {
+                    "furniture_id": s.furniture_id,
+                    "furniture_type": s.furniture_type,
+                    "room_id": s.room_id,
+                    "position": {"x": s.position_x, "y": s.position_y, "z": s.position_z},
+                    "rotation_y": s.rotation_y,
+                    "world_state": s.world_state or {},
+                }
+                for s in saves
+            ],
+        }
+    except Exception as e:
+        db.close()
+        raise HTTPException(status_code=500, detail=f"Failed to restore furniture: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
 # ── Cross-project integration endpoints ────────────────────────────────────────
 
 @app.post(
@@ -843,16 +960,40 @@ async def luna_set_state(
     tags=["integration"],
     summary="User assigns a function to a house room",
 )
-def assign_room_function(assignment: dict) -> Dict[str, Any]:
+def assign_room_function(
+    assignment: dict,
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
     """Allow user to assign a virtual function to a house room."""
-    room_id = assignment.get("room_id")
-    function = assignment.get("function")
-    return {
-        "success": True,
-        "room_id": room_id,
-        "assigned_function": function,
-        "note": "Room function assignment recorded. Original geometry unchanged.",
-    }
+    if not assignment.get("room_id") or not assignment.get("function"):
+        raise HTTPException(status_code=422, detail="room_id and function are required")
+    
+    db = database.get_db_session()
+    try:
+        meta = db.query(database.IntegrationMetadata).filter_by(user_id=auth_user_id).first()
+        if not meta:
+            meta = database.IntegrationMetadata(
+                user_id=auth_user_id,
+                room_assignments={}
+            )
+            db.add(meta)
+        
+        assignments = meta.room_assignments or {}
+        assignments[assignment["room_id"]] = assignment["function"]
+        meta.room_assignments = assignments
+        db.commit()
+        
+        return {
+            "success": True,
+            "room_id": assignment["room_id"],
+            "assigned_function": assignment["function"],
+            "note": "Room function assignment recorded. Original geometry unchanged.",
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to assign room function: {str(e)[:100]}")
+    finally:
+        db.close()
 
 
 @app.post(
@@ -860,10 +1001,32 @@ def assign_room_function(assignment: dict) -> Dict[str, Any]:
     tags=["integration"],
     summary="Save a complete user look (clothing + jewellery)",
 )
-def save_complete_look(look_data: dict) -> Dict[str, Any]:
+def save_complete_look(
+    look_data: dict,
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
     """Save a complete user look combining clothing, try-on, and jewellery."""
-    return {
-        "success": True,
-        "look_id": look_data.get("look_id", "temp"),
-        "note": "Look saved. Full integration pending Phase 3-5.",
-    }
+    look_id = look_data.get("look_id") or f"look-{int(time.time())}"
+    garment_type = look_data.get("garment_type", "outfit")
+    
+    db = database.get_db_session()
+    try:
+        save = database.OutfitSaves(
+            user_id=auth_user_id,
+            outfit_name=look_data.get("name", f"Saved Look - {look_id}"),
+            garment_type=garment_type,
+            items_json=json.dumps(look_data.get("items", [])) if look_data.get("items") else None,
+        )
+        db.add(save)
+        db.commit()
+        return {
+            "success": True,
+            "look_id": look_id,
+            "user_id": auth_user_id,
+            "note": "Complete look saved to database.",
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save look: {str(e)[:100]}")
+    finally:
+        db.close()

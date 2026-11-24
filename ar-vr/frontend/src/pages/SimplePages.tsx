@@ -14,7 +14,7 @@ export function WyaPage({ toast }: { toast: Notify }) {
       <button
         style={buttonStyle('#22c55e')}
         onClick={() =>
-          api(`/api/wardrobe/browse${qs({ user_id: 'user-guest' })}`, { method: 'POST' })
+          api(`/api/wardrobe/browse${{}}`, { method: 'POST' })
             .then(() => toast('Wardrobe loaded'))
             .catch(fail(toast, 'Wardrobe browse failed'))
         }
@@ -24,7 +24,7 @@ export function WyaPage({ toast }: { toast: Notify }) {
       <button
         style={buttonStyle('#22c55e')}
         onClick={() =>
-          api(`/api/wardrobe/outfit-recommendations${qs({ user_id: 'user-guest', occasion: 'casual' })}`, { method: 'POST' })
+          api('/api/wardrobe/outfit-recommendations', { method: 'POST', body: JSON.stringify({ occasion: 'casual' }) })
             .then(() => toast('Recommendations loaded'))
             .catch(fail(toast, 'Recommendations failed'))
         }
@@ -50,7 +50,7 @@ export function TryOnPage({ toast, avatarType, setAvatarType, avatarColors, setA
         <button
           style={buttonStyle('#f59e0b')}
           onClick={() =>
-            api(`/api/tryon/generate${qs({ garment_image_url: '/test.jpg', user_id: 'user-guest' })}`, {
+            api('/api/tryon/generate', {
               method: 'POST',
               body: JSON.stringify(avatarProps),
             })
@@ -109,7 +109,7 @@ export function LunaPage({ toast }: { toast: Notify }) {
 
   const ask = () => {
     setBusy(true)
-    api(`/api/luna/chat${qs({ message: input, token: 'test-token' })}`, { method: 'POST' })
+    api(`/api/luna/chat${qs({ message: input })}`, { method: 'POST' })
       .then(data => setReply(data?.reply || data?.response || JSON.stringify(data)))
       .catch(fail(toast, 'Luna chat failed'))
       .finally(() => setBusy(false))

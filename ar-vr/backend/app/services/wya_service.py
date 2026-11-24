@@ -40,8 +40,8 @@ class WYAService:
     async def ping(self) -> bool:
         """Check if WYA backend is reachable."""
         try:
-            await self.client.get(f"{self.base_url}/api/health/ready")
-            return True
+            response = await self.client.get(f"{self.base_url}/api/health/ready")
+            return response.status_code < 500
         except Exception:
             return False
 

@@ -22,28 +22,28 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 # ─── Service URLs (existing projects) ────────────────────────────────────────
 
-# BATISSE — Floor plan to 3D dollhouse
+# BATISSE — Floor plan to 3D dollhouse (port 9001)
 BATISSE_BASE_URL = os.getenv(
     "BATISSE_BASE_URL",
-    "http://127.0.0.1:8000",
+    "http://127.0.0.1:9001",
 )
 
-# WYA — AI-powered wardrobe intelligence
+# WYA — AI-powered wardrobe intelligence (port 9002)
 WYA_BASE_URL = os.getenv(
     "WYA_BASE_URL",
-    "http://127.0.0.1:8000",
+    "http://127.0.0.1:9002",
 )
 
-# TryOn — Virtual clothing try-on
+# TryOn — Virtual clothing try-on (port 9003)
 TRYON_BASE_URL = os.getenv(
     "TRYON_BASE_URL",
-    "http://127.0.0.1:8000",
+    "http://127.0.0.1:9003",
 )
 
-# VELARIS — AI-powered jewellery design
+# VELARIS — AI-powered jewellery design (port 9004)
 VELARIS_BASE_URL = os.getenv(
     "VELARIS_BASE_URL",
-    "http://127.0.0.1:8000",
+    "http://127.0.0.1:9004",
 )
 
 # ─── Authentication ──────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ DATABASE_URL = os.getenv(
 # ─── WYA API ─────────────────────────────────────────────────────────────────
 
 # WYA backend URL (local development or production)
-WYA_BASE_URL = os.getenv("WYA_BASE_URL", "http://127.0.0.1:8000")
+WYA_BASE_URL = os.getenv("WYA_BASE_URL", "http://127.0.0.1:9002")
 
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 

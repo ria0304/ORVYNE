@@ -21,13 +21,13 @@ client = TestClient(app)
 
 # Auth client with JWT token ─────────────────────────────────────────────────
 
-auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6MTc5NTUwMjIwMn0.579Ywt_8Tod6835WGSYiiAGuK8mMTqe3KLZAlhLjGoU"
+auth_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTEyMyIsImV4cCI6MTc5NTUxNzUyMX0.CkX-aKHq_F105y36y__VOgcChky6wdMzK_WixXU0gNc"
 
 auth_client = TestClient(app, headers={"Authorization": f"Bearer {auth_token}"})
 
 # Second user token ──────────────────────────────────────────────────────────
 
-user_token_2 = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQ1NiIsImV4cCI6MTc5NTUwMjIwMn0.4gxfVVZRBw7bsomrCtIREbU0sz-nbQBluOc1HHZKAG0"
+user_token_2 = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLTQ1NiIsImV4cCI6MTc5NTUxNzUyMX0.YHVxiAz9WiScO7mopqGjWhaDbTaFpZvGJL8IlnAuZvY"
 
 two_user_client = TestClient(app, headers={"Authorization": f"Bearer {user_token_2}"})
 

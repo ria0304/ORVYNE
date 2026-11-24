@@ -405,14 +405,26 @@ async def set_navigation_position(
 ) -> Dict[str, Any]:
     """Set user position (x, y, z) and rotation (x, y, z, w) in the virtual home."""
     user_id = auth_user_id
-    # Position is stored in-memory via session (simple approach for now)
-    # In production, would persist to RoomSaves or a dedicated table
-    return {
-        "success": True,
-        "user_id": user_id,
-        "position": position,
-        "note": "Navigation position recorded.",
-    }
+    db = database.get_db_session()
+    try:
+        meta = db.query(database.IntegrationMetadata).filter_by(user_id=user_id).first()
+        if not meta:
+            meta = database.IntegrationMetadata(user_id=user_id, room_assignments={})
+            db.add(meta)
+        # Store navigation position in metadata
+        meta.room_assignments["last_position"] = position
+        db.commit()
+        return {
+            "success": True,
+            "user_id": user_id,
+            "position": position,
+            "note": "Navigation position recorded.",
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save position: {str(e)[:100]}")
+    finally:
+        db.close()
 
 @app.post(
     "/api/navigation/set-room/{user_id}/{room_id}",
@@ -469,13 +481,15 @@ async def get_navigation_position(
     user_id = auth_user_id
     db = database.get_db_session()
     try:
-        # Check for saved position
-        room_save = db.query(database.RoomSaves).filter_by(id=user_id).first()
-        if room_save and room_save.glb_model_path:
+        # Check IntegrationMetadata for saved position
+        meta = db.query(database.IntegrationMetadata).filter_by(user_id=user_id).first()
+        saved_pos = meta.room_assignments.get("last_position") if meta and meta.room_assignments else None
+        
+        if saved_pos:
             return {
                 "success": True,
                 "user_id": user_id,
-                "position": {"x": 0.0, "y": 1.6, "z": 0.0},
+                "position": saved_pos,
                 "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
                 "note": "Saved position from previous session.",
             }

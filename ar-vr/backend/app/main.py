@@ -188,32 +188,28 @@ async def health() -> IntegrationHealth:
         # Check BATISSE
         try:
             svc = get_batisse_service()
-            await svc.ping()
-            services["batisse"] = "ok"
+            services["batisse"] = "ok" if await svc.ping() else "unreachable"
         except Exception:
             services["batisse"] = "unreachable"
 
         # Check WYA
         try:
             svc = get_wya_service()
-            await svc.ping()
-            services["wya"] = "ok"
+            services["wya"] = "ok" if await svc.ping() else "unreachable"
         except Exception:
             services["wya"] = "unreachable"
 
         # Check TryOn
         try:
             svc = get_tryon_service()
-            await svc.ping()
-            services["tryon"] = "ok"
+            services["tryon"] = "ok" if await svc.ping() else "unreachable"
         except Exception:
             services["tryon"] = "unreachable"
 
         # Check VELARIS
         try:
             svc = get_velaris_service()
-            await svc.ping()
-            services["velaris"] = "ok"
+            services["velaris"] = "ok" if await svc.ping() else "unreachable"
         except Exception:
             services["velaris"] = "unreachable"
     finally:
@@ -738,6 +734,9 @@ async def velaris_generate_3d_mesh(req: dict, auth_user_id: str = Depends(get_cu
     from app.services.velaris_service import get_velaris_service
     svc = get_velaris_service()
     result = await svc.generate_3d_mesh(req)
+    if "error" in result:
+        # Never report a failed generation as HTTP 200.
+        raise HTTPException(status_code=result.get("status_code", 502), detail=result["error"])
     return result
 
 

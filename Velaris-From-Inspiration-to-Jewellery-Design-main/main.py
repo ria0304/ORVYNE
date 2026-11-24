@@ -201,10 +201,12 @@ async def health_check():
             "storage": True,
             "svg_generator": True,
             "pdf_generator": True,
-            "type_classifier": CLASSIFY_AVAILABLE,
-            "style_classifier": STYLE_AVAILABLE,
-            "gemstone_detector": DETECT_AVAILABLE,
-            "similarity_search": SIMILAR_AVAILABLE,
+            # Report real availability (router loaded AND model/checkpoint present),
+            # not merely that the router imported.
+            "type_classifier": CLASSIFY_AVAILABLE and JewelryTypeClassifier.get().available,
+            "style_classifier": STYLE_AVAILABLE and JewelryStyleClassifier.get().available,
+            "gemstone_detector": DETECT_AVAILABLE and GemstoneDetector.get().available,
+            "similarity_search": SIMILAR_AVAILABLE and SimilaritySearch.get().available,
         }
     }
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, qs } from '../lib/api'
+import { api } from '../lib/api'
 import { Card, buttonStyle } from '../components/ui'
 import { AvatarCustomisation, type AvatarColors, type AvatarProps, type AvatarType } from '../components/AvatarCustomisation'
 import type { Notify } from '../hooks/useToast'
@@ -109,8 +109,8 @@ export function LunaPage({ toast }: { toast: Notify }) {
 
   const ask = () => {
     setBusy(true)
-    api(`/api/luna/chat${qs({ message: input })}`, { method: 'POST' })
-      .then(data => setReply(data?.reply || data?.response || JSON.stringify(data)))
+    api('/api/luna/chat', { method: 'POST', body: JSON.stringify({ message: input, intent: 'outfit-help', wya_token: localStorage.getItem('wya_token') }) })
+      .then(data => setReply(data?.reply || 'Luna had no reply.'))
       .catch(fail(toast, 'Luna chat failed'))
       .finally(() => setBusy(false))
   }

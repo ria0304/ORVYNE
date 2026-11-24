@@ -38,8 +38,8 @@ class BatisseService:
     async def ping(self) -> bool:
         """Check if BATISSE backend is reachable."""
         try:
-            await self.client.get(f"{self.base_url}/api/health")
-            return True
+            response = await self.client.get(f"{self.base_url}/api/health")
+            return response.status_code < 500
         except Exception:
             return False
 

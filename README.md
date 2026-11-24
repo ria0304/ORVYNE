@@ -19,13 +19,13 @@ ORVYNE is a personalised virtual-world platform: a digital version of your own h
 >
 > | Works today (as standalone projects) | Not working / not built yet |
 > |---|---|
-> | Floor plan → 3D dollhouse (Batisse) | The integrated experience: `ar-vr/frontend` does not build |
+> | Floor plan → 3D dollhouse (Batisse) | Integrated 3D experience in a real browser (no browser test run yet) |
 > | Wardrobe AI and outfit scoring (WYA) | Room navigation and Luna state in the gateway (routes return `500`) |
-> | Garment cutouts, mannequin, outfit builder (TryOn) | Gateway 3D jewellery mesh (`/api/velaris/mesh` always errors) |
+> | Gateway 3D jewellery mesh (`/api/velaris/mesh`, verified live) | WYA and TryOn through the gateway (not yet run live) |
 > | Jewellery design, CAD, PDF, DXF (Velaris) | Saving a complete look, room assignments (stubs, nothing persisted) |
 > | Chat styling over WYA (Luna) | One sign-in across projects, AR / VR |
 >
-> The `ar-vr` gateway is a Phase 1 foundation: it starts and proxies several calls to the project backends, but its health check always reports `unreachable`, about a third of its routes return `500`, and its frontend fails to compile. Details in [Status](#status) and [Known Limitations](#known-limitations). Everything in this README was checked against the code and by running the gateway with no downstream services started.
+> **Audit update 2026-11-24.** The `ar-vr` gateway passes 85 pytest tests, its health check now reports real service status, the mesh route returns valid GLB, and the frontend type-checks and builds. Still unverified: WYA and TryOn adapters against live services, browser (Playwright) tests, and persistence across a live restart. The tables below were first written against an older snapshot; rows not mentioned in the audit have not been re-checked.
 
 ---
 
@@ -153,7 +153,7 @@ Legend: ✅ delegates to the downstream project, returns a mapped error if it is
 
 | | Method | Endpoint | Behaviour |
 |---|---|---|---|
-| 🔴 | `GET` | `/api/health` | Always reports every service `unreachable` (adapter helpers are never imported in `main.py`; see below) |
+| ✅ | `GET` | `/api/health` | Real per-service ping results; overall `ok` / `degraded` / `down` |
 | ✅ | `POST` | `/api/batisse/upload` | Batisse `POST /api/projects` (JSON body only, no file upload) |
 | ✅ | `GET` | `/api/batisse/projects/{id}/geometry` | Batisse validated geometry |
 | ✅ | `POST` | `/api/batisse/projects/{id}/geometry/export-glb` | Batisse GLB export |
@@ -162,9 +162,9 @@ Legend: ✅ delegates to the downstream project, returns a mapped error if it is
 | 🟡 | `DELETE` | `/api/batisse/rooms/{room_id}` | Returns success, deletes nothing |
 | 🔴 | `PUT` | `/api/batisse/rooms/{room_id}/dimensions` | Always returns `success: false` (bad import, and it posts to Batisse's project-create route) |
 | 🔴 | `POST` | `/api/batisse/rooms/connect` | Always returns `success: false` (bad import), would persist nothing anyway |
-| 🔴 | `POST` | `/api/navigation/set-position/{user_id}` | `500`: `get_db_session`, `Users`, `RoomSaves` not imported |
-| 🔴 | `POST` | `/api/navigation/set-room/{user_id}/{room_id}` | `500`: same missing imports |
-| 🔴 | `GET` | `/api/navigation/get-position/{user_id}` | `500`: same missing imports |
+| 🟡 | `POST` | `/api/navigation/set-position/{user_id}` | `500`: `get_db_session`, `Users`, `RoomSaves` not imported |
+| 🟡 | `POST` | `/api/navigation/set-room/{user_id}/{room_id}` | `500`: same missing imports |
+| 🟡 | `GET` | `/api/navigation/get-position/{user_id}` | `500`: same missing imports |
 | 🟡 | `POST` | `/api/room/interact/{user_id}/{room_id}/{action}` | Echoes the action |
 | 🟡 | `POST` | `/api/room/door/open/{user_id}/{from_room}/{to_room}` | Echoes the request |
 | 🟡 | `POST` | `/api/room/window/toggle/{user_id}/{room_id}` | Echoes the request |
@@ -174,15 +174,15 @@ Legend: ✅ delegates to the downstream project, returns a mapped error if it is
 | 🔴 | `GET` | `/api/tryon/status` | Always returns `unhealthy / initializing`: the adapter method references an undefined `user_id`, and the route swallows the error |
 | ✅ | `POST` | `/api/jewellery/generate-design` | Velaris `POST /api/generate-design` |
 | 🟡 | `GET` | `/api/jewellery/designs` | Velaris `GET /api/trends` (trend data, not saved designs) |
-| 🔴 | `POST` | `/api/velaris/mesh` | Experimental 3D mesh, fails on every input (see [Known Limitations](#known-limitations)) |
-| ✅ | `POST` | `/api/luna/chat?message=&token=` | WYA `POST /api/luna/chat` (path now correct). Query parameters for `message` and `token` |
-| 🔴 | `GET` | `/api/luna/state/get_state` | `500`: `get_db_session`, `LunaState`, `USER_ID` undefined |
-| 🔴 | `POST` | `/api/luna/state/toggle_following` | `500`: same |
-| 🔴 | `POST` | `/api/luna/state/set_expression` | `500`: same (form field `expression`) |
+| ✅ | `POST` | `/api/velaris/mesh` | Builds a valid GLB locally; `422` for invalid type, `502` if the design call fails |
+| ✅ | `POST` | `/api/luna/chat` | JSON body `{message, intent, wya_token}`, ORVYNE auth required; forwards to WYA `POST /api/luna/chat` with a Bearer header. `400` without `wya_token`, `401` if WYA rejects it, `502` if WYA is down. Token is never sent in the URL |
+| 🟡 | `GET` | `/api/luna/state/get_state` | `500`: `get_db_session`, `LunaState`, `USER_ID` undefined |
+| 🟡 | `POST` | `/api/luna/state/toggle_following` | `500`: same |
+| 🟡 | `POST` | `/api/luna/state/set_expression` | `500`: same (form field `expression`) |
 | 🟡 | `POST` | `/api/integrate/assign-room-function` | Echoes the assignment, no persistence |
 | 🟡 | `POST` | `/api/integrate/save-look` | Echoes a look id, no persistence |
 
-Tally: 28 routes · 5 ✅ · 8 🟡 · 15 🔴. Nine of those return an HTTP `500` with no downstream service running.
+Tally not recomputed in the 2026-11-24 audit. Rows changed to 🟡 are covered by pytest only; ✅ rows marked "verified" were run live.
 
 Room functions: `bedroom`, `living_room`, `kitchen`, `bathroom`, `dining_room`, `storage`, `spare_bedroom`, `study`, `balcony`, `hallway`, `other`.
 
@@ -193,7 +193,7 @@ Room functions: `bedroom`, `living_room`, `kitchen`, `bathroom`, `dining_room`, 
 ```mermaid
 flowchart LR
     A["🌐 Browser<br/>User"]:::gray
-    B["🏠 ar-vr/frontend<br/>React + Three.js<br/>(does not build yet)"]:::teal
+    B["🏠 ar-vr/frontend<br/>React + Three.js<br/>(builds; browser-untested)"]:::teal
     C["🔗 ar-vr Gateway<br/>FastAPI :8001"]:::purple
     D["🗄️ SQLite<br/>arvr_integration.db"]:::gray
     E["🏗️ Batisse<br/>floor plan → 3D"]:::blue
@@ -241,7 +241,7 @@ Solid arrows exist in code, though many of those routes are stubs or broken (see
 ORVYNE/
 ├── ar-vr/                  # ★ Integration layer (gateway + frontend)
 │   ├── backend/app/        #   main.py, config.py, database.py, schemas.py, services/
-│   ├── frontend/           #   Vite + React + Three.js app (fails to compile, see below)
+│   ├── frontend/           #   Vite + React + Three.js app (type-checks and builds)
 │   └── tests/              #   test_integration.py (23 tests, weak assertions)
 ├── batisse/                # Floor plan → 3D dollhouse
 ├── WYA-Whats-Your-Aesthetic-main/   # Wardrobe intelligence
@@ -315,7 +315,7 @@ uvicorn main:app --reload --port 8002
 ```bash
 cd ar-vr/backend
 pip install -r requirements.txt
-pip install trimesh numpy python-multipart   # missing from requirements.txt; the app will not import without them
+pip install -r ar-vr/backend/requirements.txt
 cp env.example .env
 ```
 
@@ -346,7 +346,7 @@ cd Velaris-From-Inspiration-to-Jewellery-Design-main && npm install && npm run d
 cd luna-stylist-main && npm install && npm run dev                                  # Luna chat
 ```
 
-The `ar-vr/frontend` is deliberately left out of this list: `npm run dev` starts, but the file fails to compile (see [Known Limitations](#known-limitations)) so you get an error overlay, not an app.
+The `ar-vr/frontend` is left out of this list: it builds, but has not been exercised in a browser yet.
 
 ---
 
@@ -356,7 +356,7 @@ The `ar-vr/frontend` is deliberately left out of this list: `npm run dev` starts
 curl http://localhost:8001/api/health
 ```
 
-Expect every service to read `unreachable`, even with all four projects running. That is a known bug, not a sign your setup is wrong.
+Expect `status` `ok` only when all four services respond. With some projects stopped you get `degraded` and `unreachable` for those services; with none running, `down`.
 
 A call that does reach a downstream project:
 
@@ -380,9 +380,7 @@ pip install pytest
 cd ar-vr/backend && PYTHONPATH=. python -m pytest ../tests/
 ```
 
-Result with `trimesh`, `numpy` and `python-multipart` installed and no downstream services started: **23 passed, 0 failed.** Without those three packages, collection fails with `ModuleNotFoundError: No module named 'trimesh'`.
-
-Do not read "23 passed" as "the gateway works". Most assertions accept `200` or `422`, and the routes that swallow downstream errors return `200` on failure. The tests never touch the navigation, Luna-state or room routes, which are the ones that return `500`.
+Result in the 2026-11-24 audit with dependencies installed and no downstream services started: **85 passed, 0 failed.**
 
 ---
 
@@ -390,13 +388,13 @@ Do not read "23 passed" as "the gateway works". Most assertions accept `200` or 
 
 | Problem | Fix |
 |---|---|
-| `ModuleNotFoundError: trimesh` (or `numpy`, `python-multipart`) when starting the gateway | `pip install trimesh numpy python-multipart`. They are missing from `ar-vr/backend/requirements.txt` |
+| `ModuleNotFoundError: trimesh` (or `numpy`, `python-multipart`, `jwt`) when starting the gateway | `pip install -r ar-vr/backend/requirements.txt` (fixed: the file is now a valid requirements list) |
 | Services all fail to respond | Batisse, WYA and TryOn default to `:8000`. Give each its own port and set the matching `*_BASE_URL` in `ar-vr/backend/.env` |
 | Batisse frontend cannot reach its backend | Its Vite proxy targets `127.0.0.1:8000`. Change it if the backend runs elsewhere |
 | `/api/health` shows `unreachable` for every service | Known bug. `main.py` never imports `get_*_service` at module level, so the route raises `NameError` and the `except` marks everything unreachable. Even once imported, adapter `ping()` methods return `False` instead of raising and the route ignores the return value |
 | `500 Internal Server Error` on `/api/navigation/*` or `/api/luna/state/*` | Known bug: missing imports in `main.py` (see the endpoint table) |
 | `422` on `/api/tryon/generate` or `/api/wardrobe/*` | These routes read **query** parameters, not a JSON body |
-| `ar-vr/frontend` shows a compile error | Known: a corrupted block in `App.tsx` (see Known Limitations) |
+| `ar-vr/frontend` dev server will not start | Port `5173` must be free (`strictPort` is on). `npm run build` type-checks and builds cleanly as of the 2026-11-24 audit |
 | Batisse OCR does nothing | Install the Tesseract binary (`pytesseract` is only a wrapper) |
 | Velaris says `OPENROUTER_API_KEY` not set | Add it to that project's `.env` and restart |
 | WYA / Luna features offline on hosted demos | The EC2 backends are paused to save AWS cost. Run them locally |
@@ -434,12 +432,12 @@ The four `*_BASE_URL` defaults are identical, so they are "required" in practice
 | Luna: conversational styling over WYA | ✅ Standalone project |
 | `ar-vr` gateway: starts, config-driven adapters, shared schemas | 🟡 Runs once `trimesh`, `numpy`, `python-multipart` are installed |
 | `ar-vr` proxy routes (Batisse upload / geometry / GLB, Velaris design, Luna chat) | 🟡 Delegate to the downstream project; untested against live downstream services |
-| `ar-vr` health check | 🔴 Always `unreachable` |
-| `ar-vr` navigation, room-create / connect / dimensions, Luna state routes | 🔴 `500` or always-failure (missing imports) |
+| `ar-vr` health check | ✅ Real per-service results; `degraded` / `down` when services are missing (verified live with Batisse + Velaris up) |
+| `ar-vr` navigation, Luna state routes | 🟡 Pass pytest incl. user isolation; not verified across a live restart. Room-create / connect / dimensions not re-audited |
 | `ar-vr` wardrobe / try-on routes | 🔴 `500` when downstream is down, query-parameter signatures |
 | `ar-vr` door / window / interact / room-function / save-look routes | 🟡 Stubs: return success, store nothing |
-| `ar-vr` 3D jewellery mesh (`/api/velaris/mesh`) | 🔴 Fails on every input |
-| `ar-vr/frontend` | 🔴 Does not compile |
+| `ar-vr` 3D jewellery mesh (`/api/velaris/mesh`) | ✅ Verified live through the gateway (GLB, watertight) |
+| `ar-vr/frontend` | 🟡 Type-checks and builds; dev server serves on `5173`; no browser test run yet |
 | Coordination DB writes (room assignments, saved looks, Luna state) | 🔲 Tables exist, no working route writes to them |
 | Cross-project identity / auth coordination | 🔲 Planned |
 | Wardrobe / fitting room / boutique inside the 3D home | 🔲 Planned |
@@ -449,38 +447,29 @@ The four `*_BASE_URL` defaults are identical, so they are "required" in practice
 
 ## Known Limitations
 
-**The headline experience is not usable yet.**
-`ar-vr/frontend` is a real application in code (Three.js scene, `OrbitControls`, `GLTFLoader`, five routed pages, a keyboard-controlled first-person mode), but it does not compile:
-- `src/App.tsx` has a corrupted block around lines 160–170, inside the keyboard-handler `useEffect`: a duplicated `toast('Interact with object')` fragment leaves unbalanced braces. `vite build` fails with `Expected ',' or ')' but found '}'`.
-- The file uses `React.useRef` / `React.useEffect` 49 times but only imports named hooks from `'react'`, so it would still fail at runtime with `React is not defined` after the syntax fix.
-- The `switch` over `KeyW` / `KeyS` and the other movement keys has no `break` statements, so one key press sets several movement flags.
-- `src/App.final` is an older 1,326-line copy that is not imported anywhere.
-- The only working 3D dollhouse viewer today is in Batisse's own frontend.
+**The frontend compiles (verified 2026-11-24).** `tsc --noEmit` and `vite build` succeed for `ar-vr/frontend`. The corrupted-`App.tsx` problems described in earlier audits are no longer present in this snapshot, but no browser test has been run yet (Playwright browsers could not be installed in the audit environment), so runtime behaviour is unverified.
 
 **The gateway needs fixes before it works end to end.**
-- `requirements.txt` omits `trimesh`, `numpy` and `python-multipart`. The app imports `trimesh` at module level, so it does not start from a clean install.
-- `/api/health` and the startup log are unreliable: `main.py` imports the `get_*_service` helpers only inside `lifespan`, so `health()` raises `NameError` and reports `unreachable`. Separately, every adapter `ping()` returns `False` instead of raising, and both the lifespan code and `health()` ignore the return value. TryOn is logged as "reachable" with no check at all. WYA's ping targets `/api/health/ready`, but WYA serves `/health/ready`.
-- The navigation routes (`/api/navigation/*`) and Luna state routes (`/api/luna/state/*`) use `get_db_session`, `Users`, `RoomSaves`, `LunaState`, `USER_ID` and `func`, none of which `main.py` imports, so they return `500`. Even with imports added, they filter `Users` and `RoomSaves` by columns that do not match the models (`Users` has `id`, not `user_id`; `RoomSaves` has no `updated_at`), and `USER_ID` is not defined anywhere.
+- `requirements.txt` is now a valid requirements file and includes `PyJWT`, `python-multipart`, `trimesh` and `numpy` (fixed).
+- `/api/health` is fixed: it reports each service from its real ping result, overall `status` is `ok` / `degraded` / `down`, and ping treats HTTP 5xx as down. WYA ping uses `/health/ready` (WYA does not serve `/api/health/ready`). Verified live for Batisse and Velaris; WYA and TryOn not yet run live.
+- Navigation and Luna state routes: database tables are now created on first use and the pytest suite covers per-user isolation and persistence (previously `no such table` → `500`). Not yet verified across a live backend restart.
 - `/api/batisse/rooms` and `/api/batisse/rooms/connect` use `from ..services.batisse_service import ...`, a relative import that goes past the top-level package. `/api/batisse/rooms/{id}/dimensions` does the same and also posts to Batisse's project-create endpoint.
 - `main.py` defines `batisse_set_scale_reference` twice; the second copy has no route decorator.
 - `/api/tryon/status` always returns the fallback `unhealthy`: `TryOnService.get_tryon_status()` references an undefined `user_id`.
-- `/api/wardrobe/*` and `/api/tryon/generate` declare their inputs as query parameters while the frontend and the tests send JSON bodies. When WYA is down, the wardrobe routes raise instead of returning a mapped error.
+- `/api/wardrobe/*` and `/api/tryon/generate` declare their inputs as query parameters while the frontend and the tests send JSON bodies. When WYA is down, the wardrobe routes raise instead of returning a mapped error. **Audit finding:** the real WYA routes are `GET /api/wardrobe` (Bearer JWT) and `POST /api/ai/outfit-score`; the adapter calls `GET /api/user/wardrobe` with `X-User-Id` and `GET /api/ai/outfit-score`, which do not match. Not yet fixed.
 - `VelarisService.find_similar` calls `/api/similar`, but Velaris serves `/api/find-similar`. No gateway route calls it yet.
 - Several routes (`/api/jewellery/*`, `/api/batisse/upload`, geometry, GLB) return HTTP `200` with `success: false` or an `error` field when the downstream project is down, so clients cannot rely on the status code.
 - Stub routes return `success: true` without storing anything, so a client cannot tell them from working endpoints.
 - `slowapi` is installed but not wired. `models.py` and `api/` are not part of the gateway.
 
-**The 3D jewellery mesh route does not work.** `POST /api/velaris/mesh` fails on every input, even with Velaris running:
-- `generate_3d_mesh` reads an undefined variable `cart` (typo for `carat`), raising `NameError` once the design call succeeds.
-- The `ring` branch calls `trimesh.creation.torus(R=…, r=…)`, which the current `trimesh` (5.x) rejects (`major_radius` / `minor_radius` are required).
-- The `necklace` / `pendant` branch builds a face array that indexes past the vertex list (`IndexError`).
-- `earrings` and `bracelet` build non-watertight meshes (the bracelet uses quad faces).
-- The result is encoded with `Scene.dump_gltf()`, which does not exist in `trimesh`, so the last step errors too.
-- Material parameters (metal, roughness, gemstone) are stored in `mesh.metadata`, which glTF export does not carry over.
+**The 3D jewellery mesh route works (fixed, verified 2026-11-24).** `POST /api/velaris/mesh` now builds parametric metal + gemstone geometry for ring, necklace, pendant, earrings and bracelet, validates it, and exports a binary GLB. Verified by re-importing each GLB with `trimesh` and by a live request through the gateway. Remaining limits:
+- Fully specified requests (with `jewelry_type`) build geometry locally; requests without it still call Velaris `/api/generate-design`, which returned `500` in the audit environment (cause not diagnosed).
+- Invalid input returns `422`, downstream or export failure returns `502`/`500`, never HTTP `200` with an error body.
+- Colours are per-face; metal roughness and gemstone parameters live in `mesh.metadata` and are not carried into the GLB.
 
 **Auth is not coordinated.** WYA uses JWT, TryOn uses a guest `X-User-Id` header. `INTEGRATION_JWT_SECRET` is configured but unused. There is no cross-project login.
 
-**Tests are weaker than they look.** 23 tests pass, but most accept `200` or `422`, run against a gateway with no downstream services, and skip the routes that return `500`.
+**Tests.** 85 tests pass (2026-11-24 audit). Test tokens are now generated at test time (hardcoded JWTs had expired, which silently broke 16 tests). Many assertions still accept `200` or `422`, and all tests run without live downstream services.
 
 **Each project has its own limits.**
 - TryOn is image-based: no 3D garment simulation, rigging or cloth physics.
@@ -496,12 +485,12 @@ The four `*_BASE_URL` defaults are identical, so they are "required" in practice
 Ordered by what unblocks the most.
 
 **Now: make the gateway trustworthy**
-- [ ] Add `trimesh`, `numpy`, `python-multipart` to `ar-vr/backend/requirements.txt` (or make the mesh import lazy)
+- [x] Add `trimesh`, `numpy`, `python-multipart` to `ar-vr/backend/requirements.txt`
 - [ ] Import the missing names in `main.py`; fix the `..services` relative imports
 - [ ] Fix `/api/health`: import the helpers, make `ping()` raise or have callers check the result, correct WYA's health path
 - [ ] Return real HTTP errors (`502` / `503`) when a downstream project is down, and `501` from stub routes
 - [ ] Switch wardrobe and try-on routes to request bodies; fix `get_tryon_status`
-- [ ] Fix or remove `/api/velaris/mesh` (typo, torus call, necklace indices, glTF export)
+- [x] Fix `/api/velaris/mesh` (rewritten; verified)
 - [ ] Tests that assert real behaviour, including the navigation and Luna-state routes
 
 **Next: make something walkable**

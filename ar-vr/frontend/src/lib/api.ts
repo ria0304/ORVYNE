@@ -11,7 +11,25 @@ export class ApiError extends Error {
   }
 }
 
-function getToken(): string | null {
+export const SIGNED_OUT_EVENT = 'orvyne:signed-out'
+
+export function setToken(token: string): void {
+  try {
+    globalThis.localStorage?.setItem(TOKEN_KEY, token)
+  } catch {
+    /* storage unavailable: the session lasts until reload */
+  }
+}
+
+export function clearToken(): void {
+  try {
+    globalThis.localStorage?.removeItem(TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getToken(): string | null {
   try {
     return globalThis.localStorage?.getItem(TOKEN_KEY) ?? null
   } catch {
@@ -57,7 +75,15 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
   } catch (e) {
     throw new ApiError(0, e instanceof Error ? `Network error: ${e.message}` : 'Network error')
   }
-  if (!res.ok) throw new ApiError(res.status, await errorMessage(res))
+  if (!res.ok) {
+    // The ORVYNE session is gone (expired/forged token): sign out everywhere.
+    // Sign-in attempts themselves return 401 for bad credentials and must not trigger this.
+    if (res.status === 401 && token && !path.startsWith('/api/auth/login') && !path.startsWith('/api/auth/register')) {
+      clearToken()
+      globalThis.dispatchEvent?.(new Event(SIGNED_OUT_EVENT))
+    }
+    throw new ApiError(res.status, await errorMessage(res))
+  }
   if (res.status === 204) return undefined as T
   const text = await res.text()
   return (text ? JSON.parse(text) : undefined) as T

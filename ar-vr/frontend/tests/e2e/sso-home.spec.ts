@@ -88,10 +88,15 @@ test('keyboard walking moves the player and the position is saved by the backend
   await page.screenshot({ path: 'test-results/walking.png' })
 })
 
-test('WYA not running: wardrobe reports a real failure, not fake data', async () => {
+test('wardrobe page: real WYA data when linked, an honest failure when not', async () => {
   await page.getByRole('link', { name: 'WYA' }).click()
+  const me = await (await page.request.get(`${GATEWAY}/api/auth/me`, { headers: { Authorization: `Bearer ${await token()}` } })).json()
   await page.getByRole('button', { name: /Browse Wardrobe/ }).click()
-  await expect(page.getByRole('status')).toContainText('Wardrobe browse failed')
+  if (me.services.wya === 'linked') {
+    await expect(page.getByText('Your WYA wardrobe is empty.')).toBeVisible()   // a brand-new WYA account has no garments
+  } else {
+    await expect(page.getByRole('status')).toContainText('Wardrobe browse failed')
+  }
 })
 
 test('sign out returns to the one login, and bad credentials are refused', async () => {

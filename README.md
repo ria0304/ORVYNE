@@ -483,21 +483,30 @@ The four `*_BASE_URL` defaults are identical, so they are "required" in practice
 ## Roadmap
 
 Ordered by what unblocks the most.
+## Single sign-in
 
-**Now: make the gateway trustworthy**
-- [x] Add `trimesh`, `numpy`, `python-multipart` to `ar-vr/backend/requirements.txt`
-- [ ] Import the missing names in `main.py`; fix the `..services` relative imports
-- [ ] Fix `/api/health`: import the helpers, make `ping()` raise or have callers check the result, correct WYA's health path
-- [ ] Return real HTTP errors (`502` / `503`) when a downstream project is down, and `501` from stub routes
-- [ ] Switch wardrobe and try-on routes to request bodies; fix `get_tryon_status`
-- [x] Fix `/api/velaris/mesh` (rewritten; verified)
-- [ ] Tests that assert real behaviour, including the navigation and Luna-state routes
+There is one login: the ORVYNE account. Nothing else ever asks for a password.
 
-**Next: make something walkable**
-- [ ] Fix the corrupted block in `ar-vr/frontend/src/App.tsx`, import `React`, add the missing `break`s; confirm `vite build` passes
-- [ ] Load a Batisse GLB in the Three.js scene with keyboard + mouse navigation, against a live gateway
-- [ ] Persist room assignments in the coordination DB
-- [ ] Single sign-in across projects
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/auth/register` | Create the ORVYNE account `{email, password (8+), full_name}`; returns a JWT and the link status of each project |
+| `POST /api/auth/login` | Sign in `{email, password}`; refreshes any missing/expired project links |
+| `GET /api/auth/me` | Current user and link status (`wya`, `tryon`: `linked` / `not_linked`) |
+| `POST /api/auth/logout` | Drops the stored WYA session |
+
+How the projects are linked behind the one login:
+
+- **WYA** keeps its own accounts. At register / login the gateway signs in to WYA (or registers there) with the same email and password, **once, in that request**, and stores only the resulting WYA JWT. If WYA is down at that moment the status is `unavailable`, wardrobe routes return `424`, and the next ORVYNE login links it.
+- **TryOn** has guest identities only; the gateway creates one per user and stores its id (sent as `X-User-Id`). If TryOn forgets it, the gateway recreates it once and retries.
+- **BATISSE** and **VELARIS** have no per-user accounts. The gateway keeps each user's BATISSE project id and refuses any other project (`403`).
+- Passwords are stored only as salted PBKDF2-SHA256 hashes. Wrong password and unknown email return the same `401`.
+- Set `INTEGRATION_JWT_SECRET` before deploying. With `ORVYNE_ENV=production` the gateway refuses to start on the public dev secret. Tokens last 12 h (`ORVYNE_TOKEN_TTL_SECONDS`). Not implemented: token revocation, login rate limiting, password reset.
+- Frontend: `src/lib/auth.tsx` + `src/pages/LoginPage.tsx`; any `401` signs the user out.
+
+Browser tests: `cd ar-vr/frontend && npx playwright install chromium && npx playwright test` (needs BATISSE on 9001, the gateway on 8001; Vite is started by the config).
+
+
+
 
 **Later**
 - [ ] Room functions in 3D (bedroom → wardrobe, study → boutique, hallway → fitting room)

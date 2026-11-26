@@ -65,7 +65,7 @@ def init_db():
         archetype TEXT,
         summary TEXT,
         created_at TEXT,
-        FOREIGN KEY (user_id) REFERENCES users (user_id))''")
+        FOREIGN KEY (user_id) REFERENCES users (user_id))''')
     
     # ── Wardrobe Items Table ──────────────────────────────────────────────────
     cursor.execute('''CREATE TABLE IF NOT EXISTS wardrobe_items (

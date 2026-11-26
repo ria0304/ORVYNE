@@ -8,6 +8,11 @@ import {
   type FurnitureItem,
 } from '../lib/furniture'
 import { createPlayer, defaultOptions } from '../lib/player'
+import type { WallCollider } from '../lib/collision'
+import {
+  buildWardrobeUnit, chooseWardrobeRoom, garmentKind, isHanging, placeWardrobeUnit,
+  type WardrobeItem, type WardrobeUnit,
+} from '../lib/wardrobe3d'
 import {
   createHomeFromGeometry, createPlaceholderScene, disposeObject,
   SceneType, spawnFor,
@@ -88,7 +93,113 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
   )
 
   // ── Home generation ─────────────────────────────────────────────────────
-  const installHome = useCallback((next: THREE.Object3D, type: SceneType, roomList: any[]) => {
+  const [colliders, setColliders] = useState<WallCollider[]>([])
+  const baseColliders = useRef<WallCollider[]>([])
+
+  // ── WYA wardrobe: every garment hangs in the 3D wardrobe ─────────────────
+  const [wardrobeItems, setWardrobeItems] = useState<WardrobeItem[] | null>(null)
+  const [wardrobeNote, setWardrobeNote] = useState<string | null>(null)
+  const [wardrobeRoomId, setWardrobeRoomId] = useState<string | null>(null)
+  const [selectedGarmentId, setSelectedGarmentId] = useState<string | null>(null)
+  const [scanResult, setScanResult] = useState<Record<string, unknown> | null>(null)
+  const [tryOnImage, setTryOnImage] = useState<string | null>(null)
+  const wardrobeUnitRef = useRef<WardrobeUnit | null>(null)
+
+  const loadWardrobe = useCallback(async () => {
+    try {
+      const w = await api('/api/wardrobe/browse', { method: 'POST' })
+      setWardrobeItems(w?.items ?? [])
+      setWardrobeNote(null)
+    } catch (e) {
+      setWardrobeItems(null)
+      setWardrobeNote(`WYA wardrobe unavailable: ${errText(e)}`)
+    }
+    try {
+      const a = await api('/api/integrate/room-assignments')
+      const hit = Object.entries(a?.assignments ?? {}).find(([, fn]) => /wardrobe/i.test(String(fn)))
+      setWardrobeRoomId(hit ? hit[0] : null)
+    } catch {
+      /* assignments are optional */
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadWardrobe()
+  }, [loadWardrobe])
+
+  // Build the wardrobe unit inside the chosen room whenever the home or the items change.
+  useEffect(() => {
+    if (!model || !wardrobeItems?.length || !rooms.length) return
+    const room = chooseWardrobeRoom(rooms, wardrobeRoomId ? { [wardrobeRoomId]: 'wardrobe' } : {})
+    if (!room?.center) return
+    const unit = buildWardrobeUnit(wardrobeItems, Math.max(1.2, (room.width ?? 3.5) - 0.5))
+    const frontCollider = placeWardrobeUnit(unit, room)
+    model.add(unit.group)
+    wardrobeUnitRef.current = unit
+    setColliders([...baseColliders.current, frontCollider])
+    return () => {
+      model.remove(unit.group)
+      unit.dispose()
+      wardrobeUnitRef.current = null
+      setColliders(baseColliders.current)
+    }
+  }, [model, rooms, wardrobeItems, wardrobeRoomId])
+
+  useEffect(() => {
+    wardrobeUnitRef.current?.select(selectedGarmentId)
+    setScanResult(null)
+    setTryOnImage(null)
+  }, [selectedGarmentId, model, rooms, wardrobeItems, wardrobeRoomId])
+
+  const selectedGarment = wardrobeItems?.find(i => i.item_id === selectedGarmentId) ?? null
+
+  const toDataUrl = async (url: string): Promise<string> => {
+    if (url.startsWith('data:')) return url
+    const blob = await (await fetch(url)).blob()
+    return await new Promise<string>((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(String(r.result))
+      r.onerror = () => reject(new Error('Could not read the garment photo'))
+      r.readAsDataURL(blob)
+    })
+  }
+
+  const scanGarment = async (item: WardrobeItem) => {
+    if (!item.image_url) return toast('This item has no photo to classify')
+    try {
+      const res = await api('/api/wardrobe/fabric-scan', { method: 'POST', body: JSON.stringify({ image: await toDataUrl(item.image_url) }) })
+      setScanResult(res?.classification ?? null)
+    } catch (e) {
+      toast(`Fabric scan failed: ${errText(e)}`)
+    }
+  }
+
+  const tryOnSelected = async (item: WardrobeItem) => {
+    if (!item.image_url) return toast('This item has no photo to try on')
+    try {
+      const kind = garmentKind(item.category)
+      const res = await api('/api/tryon/generate', {
+        method: 'POST',
+        body: JSON.stringify({ garment_image_url: item.image_url, category: kind === 'dress' ? 'dress' : kind === 'outer' ? 'jacket' : kind === 'bottom' || kind === 'skirt' ? 'bottom' : 'top' }),
+      })
+      if (res?.url) setTryOnImage(res.url)
+      else toast('TryOn returned no image')
+    } catch (e) {
+      toast(`Try-on failed: ${errText(e)}`)
+    }
+  }
+
+  const makeWardrobeRoom = () => {
+    if (!currentRoom) return toast('Pick a room first')
+    api('/api/integrate/assign-room-function', { method: 'POST', body: JSON.stringify({ room_id: currentRoom, function: 'wardrobe' }) })
+      .then(() => {
+        setWardrobeRoomId(currentRoom)
+        toast('This room is now your wardrobe room')
+      })
+      .catch(e => toast(`Could not save: ${errText(e)}`))
+  }
+
+  const installHome = useCallback((next: THREE.Object3D, type: SceneType, roomList: any[], wallColliders: WallCollider[] = []) => {
     if (modelRef.current) disposeObject(modelRef.current)
     modelRef.current = next
     disposeFurniture(furnitureRef.current)
@@ -99,7 +210,11 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
     setRooms(roomList)
     setFurniture(items)
     setSelectedFurnitureId(null)
-    playerRef.current = createPlayer(spawnFor(next))
+    baseColliders.current = wallColliders
+    setColliders(wallColliders)
+    // Start inside the first detected room; otherwise outside the model.
+    const c = roomList[0]?.center
+    playerRef.current = createPlayer(c ? new THREE.Vector3(c.x, 0, c.z) : spawnFor(next))
   }, [])
 
   // ── Persist where the player is (backend is the source of truth) ─────────
@@ -147,7 +262,7 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
       // BATISSE has no server-side GLB export; build the scene from its validated geometry.
       const built = data?.ready_for_3d ? createHomeFromGeometry(data.geometry) : null
       if (built) {
-        installHome(built.group, SceneType.GEOMETRY_DERIVED, built.rooms)
+        installHome(built.group, SceneType.GEOMETRY_DERIVED, built.rooms, built.colliders)
         setHomeConfig('generated')
         await restorePosition()
         return
@@ -423,12 +538,14 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
             playerRef={playerRef}
             inputRef={inputRef}
             options={defaultOptions}
+            colliders={colliders}
             weather={weather}
             lunaExpression={lunaExpression}
             lunaFollowing={lunaFollowing}
             lunaBattery={lunaState.battery}
             lunaState={lunaState}
             onHourChange={onHourChange}
+            onPickWardrobe={setSelectedGarmentId}
           />
         )}
         {mode === 'walk' && (
@@ -466,6 +583,43 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
       <LunaHUD luna={lunaState} />
 
       {error && <p style={{ color: '#f87171' }}>{error}</p>}
+      {wardrobeNote && <p style={{ color: '#fbbf24' }} role="note">{wardrobeNote}</p>}
+      {wardrobeItems && (
+        <section aria-label="Wardrobe" style={{ margin: '0.75rem 0', padding: '0.75rem', border: '1px solid #475569', borderRadius: 8 }}>
+          <strong>
+            Wardrobe: {wardrobeItems.length} items ({wardrobeItems.filter(i => isHanging(garmentKind(i.category))).length} hanging,{' '}
+            {wardrobeItems.filter(i => !isHanging(garmentKind(i.category))).length} on the shelf)
+          </strong>
+          {wardrobeItems.length === 0 && <p style={{ color: '#94a3b8' }}>Your WYA wardrobe is empty. Add garments in WYA and they will hang here.</p>}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {wardrobeItems.map(it => (
+              <button key={it.item_id} onClick={() => setSelectedGarmentId(selectedGarmentId === it.item_id ? null : it.item_id)}
+                style={chip(selectedGarmentId === it.item_id)}>
+                {it.name ?? 'Item'}
+              </button>
+            ))}
+          </div>
+          {selectedGarment && (
+            <div role="region" aria-label="Selected garment" style={{ marginTop: 10, padding: 10, background: '#0b1220', borderRadius: 8 }}>
+              <strong>{selectedGarment.name ?? 'Item'}</strong>
+              <div style={{ color: '#94a3b8', fontSize: '0.85rem' }}>
+                {[selectedGarment.category, selectedGarment.color, selectedGarment.fabric, selectedGarment.brand].filter(Boolean).join(' · ')}
+                {typeof selectedGarment.wear_count === 'number' ? ` · worn ${selectedGarment.wear_count}×` : ''}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <button style={chip(false)} onClick={() => void scanGarment(selectedGarment)}>Classify fabric (WYA)</button>
+                <button style={chip(false)} onClick={() => void tryOnSelected(selectedGarment)}>Try on (TryOn)</button>
+                <button style={chip(false)} onClick={() => setSelectedGarmentId(null)}>Put back</button>
+              </div>
+              {scanResult && <pre aria-label="Fabric classification" style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem', marginTop: 8 }}>{JSON.stringify(scanResult, null, 2)}</pre>}
+              {tryOnImage && <img src={tryOnImage} alt="Try-on result" style={{ width: '100%', maxWidth: 320, borderRadius: 8, marginTop: 8 }} />}
+            </div>
+          )}
+          {currentRoom && (
+            <button style={{ ...chip(false), marginTop: 10 }} onClick={makeWardrobeRoom}>Use the selected room as my wardrobe room</button>
+          )}
+        </section>
+      )}
       {rooms.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: '1rem' }}>
           {rooms.map((room, i) => {

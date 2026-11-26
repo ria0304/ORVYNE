@@ -52,10 +52,11 @@ VELARIS_BASE_URL = os.getenv(
 # or generated here for development). User tokens from each project are NEVER
 # shared across services; instead, the integration layer validates that a user
 # has authorized access to the requested resource via per-project JWTs.
-INTEGRATION_JWT_SECRET = os.getenv(
-    "INTEGRATION_JWT_SECRET",
-    "ar-vr-dev-secret-change-in-production",
-)
+_DEV_JWT_SECRET = "ar-vr-dev-secret-change-in-production"
+INTEGRATION_JWT_SECRET = os.getenv("INTEGRATION_JWT_SECRET", _DEV_JWT_SECRET)
+USING_DEV_JWT_SECRET = INTEGRATION_JWT_SECRET == _DEV_JWT_SECRET
+# With ORVYNE_ENV=production the gateway refuses to start on the public dev secret.
+ORVYNE_ENV = os.getenv("ORVYNE_ENV", "development")
 
 # ─── Database ─────────────────────────────────────────────────────────────────
 

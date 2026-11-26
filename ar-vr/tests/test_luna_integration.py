@@ -186,8 +186,7 @@ class TestBATISSEIntegration:
     def test_batisse_geometry_with_auth(self):
         """BATISSE geometry retrieval with valid auth."""
         response = client_a.get("/api/batisse/geometry")
-        # May fail if BATISSE not running, but auth should work
-        assert response.status_code in (200, 422, 503)
+        assert response.status_code == 404  # user-a has uploaded no floor plan
 
 # ── Real Integration Tests (WYA) ─────────────────────────────────────────────
 
@@ -196,16 +195,16 @@ class TestWYAIntegration:
 
     def test_wardrobe_browse_with_auth(self):
         """WYA wardrobe browse with valid auth."""
-        response = client_a.post("/api/wardrobe/browse", json={"user_id": "user-a"})
-        assert response.status_code in (200, 422, 503)
+        response = client_a.post("/api/wardrobe/browse")
+        assert response.status_code == 424  # user-a has no linked WYA session
 
     def test_outfit_recommendations_with_auth(self):
         """WYA outfit recommendations with valid auth."""
         response = client_a.post(
             "/api/wardrobe/outfit-recommendations",
-            json={"user_id": "user-a", "occasion": "casual"},
+            json={},
         )
-        assert response.status_code in (200, 422, 503)
+        assert response.status_code == 424  # user-a has no linked WYA session
 
 # ── Real Integration Tests (VELARIS) ────────────────────────────────────────
 

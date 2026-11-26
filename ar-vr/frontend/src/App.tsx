@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
 import { BASE_URL } from './lib/api'
+import { AuthProvider, useAuth } from './lib/auth'
+import { LoginPage } from './pages/LoginPage'
 import { useToast } from './hooks/useToast'
 import type { AvatarColors, AvatarProps, AvatarType } from './components/AvatarCustomisation'
 import { LunaPage, TryOnPage, VelarisPage, WyaPage } from './pages/SimplePages'
@@ -18,6 +20,22 @@ const navItems = [
 ]
 
 export default function App() {
+  return (
+    <AuthProvider>
+      <Gate />
+    </AuthProvider>
+  )
+}
+
+/** Shows the single ORVYNE login until the user is signed in. */
+function Gate() {
+  const { user, checking } = useAuth()
+  if (checking) return <p style={{ color: '#94a3b8', padding: '2rem', background: '#0a0e17', minHeight: '100vh', margin: 0 }}>Restoring your session…</p>
+  return user ? <Shell /> : <LoginPage />
+}
+
+function Shell() {
+  const { user, services, logout } = useAuth()
   const { message, show: toast } = useToast()
   const [avatarType, setAvatarType] = useState<AvatarType>('human')
   const [avatarColors, setAvatarColors] = useState<AvatarColors>({ primary: 0x6c5ce7, secondary: 0xa29bfe })
@@ -53,7 +71,7 @@ export default function App() {
             <h2 style={{ margin: 0, fontSize: '1.5rem', letterSpacing: 0.5 }}>ORVYNE</h2>
             <p style={{ margin: 0, opacity: 0.8, fontSize: '0.85rem' }}>Personal Virtual Home & Lifestyle Universe</p>
           </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
             {navItems.map(item => (
               <NavLink
                 key={item.to}
@@ -71,6 +89,13 @@ export default function App() {
                 {item.label}
               </NavLink>
             ))}
+            <span title="Linked downstream accounts" style={{ color: '#64748b', fontSize: '0.8rem' }}>
+              WYA {services.wya === 'linked' ? '✓' : '✗'} · TryOn {services.tryon === 'linked' ? '✓' : '✗'}
+            </span>
+            <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>{user?.email}</span>
+            <button onClick={() => void logout()} style={{ background: 'none', border: '1px solid #475569', color: '#cbd5e1', borderRadius: 6, padding: '0.35rem 0.8rem', cursor: 'pointer' }}>
+              Sign out
+            </button>
           </div>
         </nav>
 

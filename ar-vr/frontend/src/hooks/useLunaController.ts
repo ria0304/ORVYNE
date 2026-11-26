@@ -145,9 +145,11 @@ export function useLunaController() {
       case 'open my wardrobe':
       case 'show wardrobe':
         speak('Opening your wardrobe...')
-        api('/api/wardrobe/browse').then(wardrobe => {
-          const items = wardrobe?.items?.slice(0, 5) ?? ['browser', 'suit', 'heels', 'purse', 'scotch']
-          speak(`Here are your top items: ${items.join(', ')}`)
+        api('/api/wardrobe/browse', { method: 'POST' }).then(wardrobe => {
+          const items: any[] = wardrobe?.items ?? []
+          speak(items.length
+            ? `Here are your top items: ${items.slice(0, 5).map(i => i?.name ?? 'an item').join(', ')}`
+            : 'Your wardrobe is empty.')
         }).catch(() => speak('I cannot reach your wardrobe right now.'))
         break
 

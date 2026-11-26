@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { resolveCollisions, type WallCollider } from './collision'
 
 export interface InputState {
   forward: boolean
@@ -78,6 +79,7 @@ export function stepPlayer(
   input: InputState,
   dt: number,
   options: PlayerOptions = defaultOptions,
+  colliders: readonly WallCollider[] = [],
 ): PlayerState {
   dt = Math.min(Math.max(dt, 0), 0.1) // tolerate tab-switch spikes
 
@@ -93,6 +95,7 @@ export function stepPlayer(
   if (move.lengthSq() > 0) {
     move.normalize().applyAxisAngle(UP, p.yaw).multiplyScalar(speed * dt)
     p.position.add(move)
+    resolveCollisions(p.position, colliders)
   }
   p.position.x = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, p.position.x))
   p.position.z = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, p.position.z))

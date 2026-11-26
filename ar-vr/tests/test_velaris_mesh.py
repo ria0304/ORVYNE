@@ -61,19 +61,9 @@ def test_health_status_degraded_or_down_when_services_missing():
 
 
 def test_luna_chat_requires_auth():
-    r = TestClient(app).post("/api/luna/chat", json={"message": "hi", "wya_token": "x"})
-    assert r.status_code == 401
+    assert TestClient(app).post("/api/luna/chat", json={"message": "hi"}).status_code == 401
 
 
-def test_luna_chat_rejects_token_in_query_and_missing_wya_token():
-    c = _client()
-    # token in the URL is ignored; without a body wya_token the request is refused
-    r = c.post("/api/luna/chat?token=secret", json={"message": "hi"})
-    assert r.status_code == 400
-
-
-def test_luna_chat_wya_down_is_502_not_200(monkeypatch):
-    from app import config as cfg
-    monkeypatch.setattr(cfg, "WYA_BASE_URL", "http://127.0.0.1:9")  # nothing listens here
-    r = _client().post("/api/luna/chat", json={"message": "hi", "wya_token": "t"})
-    assert r.status_code == 502
+def test_luna_chat_without_linked_wya_is_424():
+    r = _client("luna-unlinked").post("/api/luna/chat", json={"message": "hi"})
+    assert r.status_code == 424

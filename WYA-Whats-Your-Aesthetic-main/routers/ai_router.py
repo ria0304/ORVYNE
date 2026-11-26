@@ -69,7 +69,12 @@ async def outfit_score(
     conn = get_db()
 
     dna_row = conn.execute(
-        "SELECT styles, color_preference FROM style_dna WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT styles FROM style_dna WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+        (user.user_id,)
+    ).fetchone()
+    # `color_preference` is stored on the evolution snapshots, not on style_dna.
+    cp_row = conn.execute(
+        "SELECT color_preference FROM style_evolution WHERE user_id = ? ORDER BY snapshot_date DESC LIMIT 1",
         (user.user_id,)
     ).fetchone()
 
@@ -78,7 +83,7 @@ async def outfit_score(
         try:
             style_dna = {
                 "styles": json.loads(dna_row["styles"]) if dna_row["styles"] else [],
-                "color_preference": dna_row["color_preference"]
+                "color_preference": cp_row["color_preference"] if cp_row else None
             }
         except Exception:
             pass
@@ -264,6 +269,11 @@ async def gap_analysis(
     data: Dict[str, Any] = Body(default={}),
     user: UserProfile = Depends(get_current_user)
 ):
+    return await compute_gap_analysis(user, data)
+
+
+async def compute_gap_analysis(user: UserProfile, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Shared by the /gap-analysis route and the Luna chat router."""
     from services.gap_analyzer import gap_analyzer
 
     conn = get_db()

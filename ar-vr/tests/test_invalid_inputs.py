@@ -164,13 +164,13 @@ class TestDownstreamFailures:
     """Test graceful handling of downstream service failures."""
 
     def test_wardrobe_browse_service_down(self):
-        """WARDROBE browse fails gracefully when service is down."""
-        with patch('app.services.wya_service.WYAService.get_wardrobe', new_callable=AsyncMock) as mock:
+        """A WYA failure is a real HTTP error, never a 200 with an error string."""
+        with patch('app.main.get_wya_token', return_value="tok"), \
+             patch('app.services.wya_service.WYAService.get_wardrobe', new_callable=AsyncMock) as mock:
             mock.side_effect = Exception("Service unavailable")
-            response = client_a.post("/api/wardrobe/browse", json={"user_id": "user-a"})
-            assert response.status_code in (200, 422, 503)
-            data = response.json()
-            assert data.get("error") is None or "unavailable" in data.get("error", "").lower()
+            response = client_a.post("/api/wardrobe/browse")
+            assert response.status_code == 502
+            assert "WYA" in response.json()["detail"]
 
     def test_velaris_mesh_generation_failure(self):
         """VELARIS mesh generation handles failures gracefully."""

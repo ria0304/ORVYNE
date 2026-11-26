@@ -483,6 +483,21 @@ The four `*_BASE_URL` defaults are identical, so they are "required" in practice
 ## Roadmap
 
 Ordered by what unblocks the most.
+## Wardrobe in 3D and VR
+
+Every garment stored in the user's WYA wardrobe hangs in their ORVYNE home.
+
+- The gateway reads the wardrobe from WYA with the user's own linked session (`POST /api/wardrobe/browse`); ORVYNE keeps no wardrobe database.
+- A wardrobe unit (carcass with doors, drawers, mirror, rail, LED strip, top shelf) is built in the room the user assigned as `wardrobe` (button: "Use the selected room as my wardrobe room"); otherwise a bedroom/closet, otherwise the first room. Clothes (tops, outerwear, dresses, skirts, trousers) hang on hangers; shoes, bags and accessories sit on the shelf. Colours come from the WYA colour field.
+- Click a hanger (or a name chip) to pull the garment forward and see its details. "Classify fabric (WYA)" sends the garment photo to WYA's classifier (`POST /api/wardrobe/fabric-scan`); "Try on (TryOn)" sends it to TryOn (image-based preview, not a cloth simulation). Both need the garment to have a photo.
+- Wall collision: walls block the player, doorways stay open; the wardrobe front is blocked so you stand in front of it.
+- **VR (WebXR):** an "Enter VR" button appears only when the browser reports `immersive-vr` support. In VR the left thumbstick moves (with wall collision), the right thumbstick snap-turns, and the controller trigger picks a hanger. **Not tested on a headset**: only the button gating (stubbed WebXR) and the build are verified.
+
+Notes for running WYA behind the gateway:
+
+- WYA limits registrations to 3/min and other calls to 60/min **per IP**. The gateway forwards each user's IP as `X-Forwarded-For`; set `TRUSTED_PROXY_IPS=<gateway ip>` on WYA so it honours it. `RATE_LIMIT_ENABLED=false` switches limiting off for automated tests only.
+- VELARIS design generation needs `OPENROUTER_API_KEY`; without it VELARIS answers 500 ("OPENROUTER_API_KEY environment variable is not configured") and the gateway returns 502 with that reason.
+
 ## Single sign-in
 
 There is one login: the ORVYNE account. Nothing else ever asks for a password.

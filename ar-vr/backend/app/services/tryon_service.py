@@ -77,31 +77,28 @@ class TryOnService:
     # ── Try-on ────────────────────────────────────────────────────────────
 
     async def generate_tryon(
-        self, garment_image_url: str, avatar_params: Dict[str, Any], user_id: str
+        self, garment_image_url: str, avatar: str, category: str, tryon_user_id: str
     ) -> Dict[str, Any]:
-        """Generate a try-on preview for a garment.
+        """Image-based try-on: TryOn `POST /api/tryon` (X-User-Id = the user's TryOn guest id).
 
-        Delegates to TryOn /api/tryon endpoint. Currently returns an
-        image-based preview (the existing pipeline is image-based, not 3D).
-        The garment is draped on the try-on service's stand-in body.
+        TryOn dresses its own stand-in body; it takes no person photo. The
+        result `url` is made absolute so the browser can display the image.
         """
-        body = {
-            "garment_image_url": garment_image_url,
-            "avatar": avatar_params,
-        }
         response = await self.client.post(
             f"{self.base_url}/api/tryon",
-            headers={"X-User-Id": user_id},
-            json=body,
+            headers={"X-User-Id": tryon_user_id},
+            json={"avatar": avatar, "garmentImageUrl": garment_image_url, "category": category},
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        url = data.get("url", "")
+        if url.startswith("/"):
+            data["url"] = f"{self.base_url}{url}"
+        return data
 
-    async def get_tryon_status(self, user_id: str) -> Dict[str, Any]:
-        """Check TryOn pipeline readiness status."""
-        response = await self.client.get(
-            f"{self.base_url}/api/tryon/status", headers={"X-User-Id": user_id}
-        )
+    async def get_tryon_status(self) -> Dict[str, Any]:
+        """Pipeline readiness: TryOn `GET /api/tryon/status` (no user needed)."""
+        response = await self.client.get(f"{self.base_url}/api/tryon/status")
         response.raise_for_status()
         return response.json()
 

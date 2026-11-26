@@ -82,13 +82,11 @@ class WYAService:
 
     # ── Wardrobe ───────────────────────────────────────────────────────────
 
-    async def get_wardrobe(self, user_id: str) -> Dict[str, Any]:
-        """Get user's wardrobe items from WYA backend.
-
-        Returns wardrobe items with categories, embeddings, colors, brands,
-        and style information.
-        """
-        response = await self.client.get(f"{self.base_url}/api/user/wardrobe", headers={"X-User-Id": user_id})
+    async def get_wardrobe(self, token: str) -> list:
+        """The signed-in user's wardrobe: WYA `GET /api/wardrobe` (Bearer JWT, user-scoped by WYA)."""
+        response = await self.client.get(
+            f"{self.base_url}/api/wardrobe", headers={"Authorization": f"Bearer {token}"}
+        )
         response.raise_for_status()
         return response.json()
 
@@ -113,28 +111,26 @@ class WYAService:
 
     # ── Outfit recommendations ────────────────────────────────────────────
 
-    async def get_outfit_recommendations(
-        self, user_id: str, occasion: Optional[str] = None, weather: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Get AI-powered outfit recommendations from WYA.
-
-        Delegates to WYA's /api/ai/outfit-score or similar endpoints.
-        """
-        params: Dict[str, Any] = {}
-        if occasion:
-            params["occasion"] = occasion
-        if weather:
-            params["weather"] = weather
-
-        response = await self.client.get(
-            f"{self.base_url}/api/ai/outfit-score",
-            params=params,
-            headers={"X-User-Id": user_id},
+    async def curate_outfits(self, token: str, items: list) -> Dict[str, Any]:
+        """Outfit recommendations from the user's wardrobe items: WYA `POST /api/ai/curate-outfits`."""
+        response = await self.client.post(
+            f"{self.base_url}/api/ai/curate-outfits",
+            json={"items": items},
+            headers={"Authorization": f"Bearer {token}"},
         )
         response.raise_for_status()
         return response.json()
 
-    # ── Outfit feedback ───────────────────────────────────────────────────
+    async def score_outfit(self, token: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Outfit score: WYA `POST /api/ai/outfit-score` (body: {outfit, style_dna?, ...})."""
+        response = await self.client.post(
+            f"{self.base_url}/api/ai/outfit-score",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
 
     async def record_feedback(
         self, user_id: str, token: str, feedback_data: Dict[str, Any]

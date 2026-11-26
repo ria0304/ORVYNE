@@ -28,6 +28,7 @@ from . import config
 from . import database  # noqa: F401
 from .schemas import IntegrationHealth  # noqa: F401
 from .services import batisse_service, wya_service, tryon_service, velaris_service  # noqa: F401
+from .request_context import client_ip_var
 from .auth import get_current_user, get_wya_token, clear_wya_token, get_tryon_user_id, router as auth_router
 from .services.batisse_service import get_batisse_service
 from .services.wya_service import get_wya_service
@@ -159,6 +160,7 @@ app.include_router(auth_router)
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     import time
+    client_ip_var.set(request.client.host if request.client else None)
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
@@ -580,6 +582,16 @@ async def wardrobe_outfit_score(body: OutfitScoreBody, auth_user_id: str = Depen
     return {"source": "wya", "score": await _wya_call(auth_user_id, lambda t: get_wya_service().score_outfit(t, payload))}
 
 
+class FabricScanBody(BaseModel):
+    image: str = Field(min_length=20, max_length=12_000_000)   # data URL or base64 of the garment photo
+
+
+@app.post("/api/wardrobe/fabric-scan", tags=["wardrobe"], summary="Classify a garment photo with WYA (fabric, colour, category)")
+async def wardrobe_fabric_scan(body: FabricScanBody, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    result = await _wya_call(auth_user_id, lambda t: get_wya_service().scan_fabric(t, body.image))
+    return {"source": "wya", "classification": result}
+
+
 # ── TryOn — Virtual fitting room ──────────────────────────────────────────────
 
 class TryOnBody(BaseModel):
@@ -681,7 +693,7 @@ async def luna_chat(body: LunaChatBody, auth_user_id: str = Depends(get_current_
             response = await client.post(
                 f"{config.WYA_BASE_URL}/api/luna/chat",
                 json={"message": body.message, "intent": body.intent},
-                headers={"Authorization": f"Bearer {token}"},
+                headers={"Authorization": f"Bearer {token}", **({"X-Forwarded-For": client_ip_var.get()} if client_ip_var.get() else {})},
             )
             response.raise_for_status()
             return response.json()

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { api, qs } from '../lib/api'
+import { api, ApiError } from '../lib/api'
 import { expressionForHour, type LunaExpression, type Weather } from '../lib/environment'
 import { useLunaController } from '../hooks/useLunaController'
 import {
@@ -9,7 +9,7 @@ import {
 } from '../lib/furniture'
 import { createPlayer, defaultOptions } from '../lib/player'
 import {
-  createGeometryDerivedScene, createPlaceholderScene, disposeObject, loadActualBatisseGLB,
+  createHomeFromGeometry, createPlaceholderScene, disposeObject,
   SceneType, spawnFor,
 } from '../lib/scene'
 import { Card, buttonStyle } from '../components/ui'
@@ -29,10 +29,12 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
   const [model, setModel] = useState<THREE.Object3D | null>(null)
   const [rooms, setRooms] = useState<any[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [needsScale, setNeedsScale] = useState(false)
+  const [scaleLength, setScaleLength] = useState('')
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [currentRoom, setCurrentRoom] = useState<string | null>(null)
-  const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'error'>('none')
+  const [homeConfig, setHomeConfig] = useState<'none' | 'loading' | 'generated' | 'empty' | 'error'>('none')
   const [furniture, setFurniture] = useState<FurnitureItem[]>([])
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null)
   const [meshUrl, setMeshUrl] = useState<string | undefined>(undefined)
@@ -100,42 +102,86 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
     playerRef.current = createPlayer(spawnFor(next))
   }, [])
 
+  // ── Persist where the player is (backend is the source of truth) ─────────
+  const lastSaved = useRef('')
+  const savePosition = useCallback(() => {
+    const p = playerRef.current
+    const key = [p.position.x, p.position.y, p.position.z, p.yaw].map(n => n.toFixed(2)).join(',')
+    if (key === lastSaved.current) return
+    lastSaved.current = key
+    api('/api/navigation/state', {
+      method: 'PUT',
+      body: JSON.stringify({
+        position: { x: p.position.x, y: p.position.y, z: p.position.z },
+        rotation: { x: 0, y: Math.sin(p.yaw / 2), z: 0, w: Math.cos(p.yaw / 2) },
+      }),
+    }).catch(() => {
+      lastSaved.current = '' // retry on the next tick
+    })
+  }, [])
+
+  const restorePosition = useCallback(async () => {
+    try {
+      const st = await api('/api/navigation/state')
+      if (!st?.saved) return
+      const p = playerRef.current
+      p.position.set(st.position.x, st.position.y, st.position.z)
+      p.yaw = 2 * Math.atan2(st.rotation.y, st.rotation.w)
+      lastSaved.current = [p.position.x, p.position.y, p.position.z, p.yaw].map((n: number) => n.toFixed(2)).join(',')
+      if (st.room_id) setCurrentRoom(st.room_id)
+    } catch {
+      /* no saved position: stay at the spawn point */
+    }
+  }, [])
+
   const loadHome = useCallback(async () => {
     const token = ++loadToken.current
     const stale = () => token !== loadToken.current
     setLoading(true)
     setError(null)
+    setNeedsScale(false)
     setHomeConfig('loading')
     try {
-      const data = await api(`/api/batisse/geometry`)
+      const data = await api('/api/batisse/geometry')
       if (stale()) return
-      const roomList: any[] = data?.rooms || []
-
-      if (data?.ready_for_3d && data?.geometry) {
-        try {
-          const glb = await api(`/api/batisse/geometry/export-glb`, { method: 'POST' })
-          const loaded = glb && glb.success !== false ? await loadActualBatisseGLB(glb.glb_base64 || '') : null
-          if (stale()) return
-          if (loaded) {
-            installHome(loaded, SceneType.ACTUAL_BATISSE, roomList)
-            setHomeConfig('generated')
-            return
-          }
-        } catch {
-          /* fall through to geometry-derived */
-        }
+      // BATISSE has no server-side GLB export; build the scene from its validated geometry.
+      const built = data?.ready_for_3d ? createHomeFromGeometry(data.geometry) : null
+      if (built) {
+        installHome(built.group, SceneType.GEOMETRY_DERIVED, built.rooms)
+        setHomeConfig('generated')
+        await restorePosition()
+        return
       }
-      installHome(createGeometryDerivedScene(roomList), SceneType.GEOMETRY_DERIVED, roomList)
-      setHomeConfig('generated')
-    } catch {
+      setNeedsScale(data?.ready_for_3d === false)
+      setError(data?.ready_for_3d === false
+        ? 'Your floor plan needs a real-world scale before it can be shown in 3D.'
+        : 'BATISSE returned no usable rooms.')
+      setHomeConfig('error')
+      installHome(createPlaceholderScene(), SceneType.PLACEHOLDER, [])
+    } catch (e) {
       if (stale()) return
-      setError('BATISSE backend unavailable — showing placeholder scene')
+      if (e instanceof ApiError && e.status === 404) {
+        // Signed in, but no floor plan uploaded yet: not an error.
+        setHomeConfig('empty')
+        installHome(createPlaceholderScene(), SceneType.PLACEHOLDER, [])
+        return
+      }
+      setError(`BATISSE unavailable: ${errText(e)}`)
       setHomeConfig('error')
       installHome(createPlaceholderScene(), SceneType.PLACEHOLDER, [])
     } finally {
       if (!stale()) setLoading(false)
     }
-  }, [installHome])
+  }, [installHome, restorePosition])
+
+  useEffect(() => {
+    if (mode !== 'walk') return
+    const id = setInterval(savePosition, 2000)
+    return () => {
+      clearInterval(id)
+      savePosition()
+    }
+  }, [mode, savePosition])
 
   useEffect(() => {
     void loadHome()
@@ -174,28 +220,49 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
       .catch(() => toast('Door navigation failed'))
   }
 
-  const upload = () => {
+  const uploadFile = (file: File) => {
     setUploading(true)
-    api('/api/batisse/upload', {
-      method: 'POST',
-      body: JSON.stringify({ name: 'My Floor Plan', description: 'Uploaded from ORVYNE frontend' }),
-    })
+    const form = new FormData()
+    form.append('file', file)
+    form.append('name', file.name.replace(/\.[^.]+$/, '') || 'My home')
+    api('/api/batisse/upload', { method: 'POST', body: form })
       .then(res => {
-        if (res?.success === false) throw new Error(res.note || 'upload failed')
-        toast('Floor plan uploaded')
+        toast(`Floor plan processed: ${res?.room_count ?? 0} rooms detected`)
         return loadHome()
       })
       .catch(e => toast(`BATISSE upload failed: ${errText(e)}`))
       .finally(() => setUploading(false))
   }
 
+  const applyScale = () => {
+    const length = Number(scaleLength)
+    if (!(length > 0)) return toast('Enter the wall length in metres')
+    api('/api/batisse/scale-from-longest-wall', { method: 'POST', body: JSON.stringify({ length, unit: 'm' }) })
+      .then(() => {
+        toast('Scale set')
+        return loadHome()
+      })
+      .catch(e => toast(`Could not set scale: ${errText(e)}`))
+  }
+
+  const upload = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.png,.jpg,.jpeg,.pdf'
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (file) uploadFile(file)
+    }
+    input.click()
+  }
+
   const browseWyaWardrobe = async (): Promise<any | null> => {
     try {
-      const wardrobe = await api(`/api/wardrobe/browse${qs({ user_id: 'user-guest' })}`, { method: 'POST' })
+      const wardrobe = await api('/api/wardrobe/browse', { method: 'POST' })
       const items: any[] = wardrobe?.items ?? []
       toast(
         items.length
-          ? `Wardrobe loaded with: ${items.slice(0, 5).map(i => i.item_name ?? i.name ?? 'Item').join(', ')}`
+          ? `Wardrobe loaded with: ${items.slice(0, 5).map(i => i.name ?? i.item_name ?? 'Item').join(', ')}`
           : 'Wardrobe loaded',
       )
       return wardrobe
@@ -208,15 +275,15 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
 
   const tryOnGarment = async () => {
     try {
-      const wardrobe = await api(`/api/wardrobe/browse${qs({ user_id: 'user-guest' })}`, { method: 'POST' })
+      const wardrobe = await api('/api/wardrobe/browse', { method: 'POST' })
       const first = (wardrobe?.items ?? [])[0]
       const garmentImage: string = first?.image_url ?? first?.file_url ?? ''
       if (!garmentImage) return toast('No garments available for try-on')
-      const result = await api(
-        `/api/tryon/generate${qs({ garment_image_url: garmentImage, user_id: 'user-guest' })}`,
-        { method: 'POST', body: JSON.stringify(avatarProps) },
-      )
-      toast(result?.image_url ? `TryOn result: ${result.image_url}` : 'TryOn preview generated')
+      const result = await api('/api/tryon/generate', {
+        method: 'POST',
+        body: JSON.stringify({ garment_image_url: garmentImage, category: first?.category === 'dress' ? 'dress' : 'top' }),
+      })
+      toast(result?.url ? `TryOn image ready: ${result.url}` : 'TryOn returned no image')
     } catch (e) {
       toast('TryOn failed')
       console.error('TRYON ERROR:', e)
@@ -304,10 +371,23 @@ export function BatissePage({ toast, avatarProps }: { toast: Notify; avatarProps
         Scene: {sceneType.replace('_', ' ')} · {rooms.length} rooms
         {homeConfig !== 'none' && (
           <span style={{ marginLeft: '1rem', color: '#64748b' }}>
-            {homeConfig === 'generated' ? 'Home generated' : homeConfig === 'error' ? 'Home error' : 'Home loading'}
+            {homeConfig === 'generated' ? 'Home generated from your floor plan' : homeConfig === 'empty' ? 'No floor plan yet: upload one' : homeConfig === 'error' ? 'Home error' : 'Home loading'}
           </span>
         )}
       </small>
+
+      {needsScale && (
+        <div role="group" aria-label="Set plan scale" style={{ margin: '0.5rem 0', padding: '0.75rem', border: '1px solid #3b82f6', borderRadius: 8 }}>
+          <label htmlFor="scale-length" style={{ display: 'block', marginBottom: 6 }}>
+            How long is the longest wall in your plan, in metres?
+          </label>
+          <input id="scale-length" inputMode="decimal" value={scaleLength} onChange={e => setScaleLength(e.target.value)}
+            style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid #3b82f6', background: '#0f172a', color: '#e0e7ff', marginRight: 8 }} />
+          <button style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid #3b82f6', background: 'rgba(59,130,246,0.3)', color: '#fff', cursor: 'pointer' }} onClick={applyScale}>
+            Set scale
+          </button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', margin: '0.75rem 0' }}>
         <button style={chip(mode === 'walk')} onClick={() => setMode(m => (m === 'walk' ? 'orbit' : 'walk'))}>

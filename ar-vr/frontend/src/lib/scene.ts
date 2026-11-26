@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import type { WallCollider } from './collision'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
 export enum SceneType {
@@ -41,10 +42,11 @@ type Hole = { from: number; to: number; sill: number; top: number }
  * windows so rooms are actually connected. Returns null when the geometry is
  * not in metres (scale not yet confirmed), because the dimensions would be wrong.
  */
-export function createHomeFromGeometry(geometry: any): { group: THREE.Group; rooms: any[] } | null {
+export function createHomeFromGeometry(geometry: any): { group: THREE.Group; rooms: any[]; colliders: WallCollider[] } | null {
   if (!geometry || geometry.units !== 'm' || !Array.isArray(geometry.floors) || !geometry.floors.length) return null
   const group = new THREE.Group()
   const rooms: any[] = []
+  const colliders: WallCollider[] = []
   const wallMat = mat(0xd9d4cb)
   const doorMat = new THREE.MeshStandardMaterial({ color: 0x7a5232 })
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x9bd1ff, transparent: true, opacity: 0.35 })
@@ -110,6 +112,13 @@ export function createHomeFromGeometry(geometry: any): { group: THREE.Group; roo
         m.position.set(sx + (ex - sx) * t, y0 + (bottom + top) / 2, sy + (ey - sy) * t)
         m.rotation.y = ang
         group.add(m)
+        // Anything that reaches the floor blocks the player; lintels above doors/windows do not.
+        if (bottom < 0.3) {
+          colliders.push({
+            ax: sx + (ex - sx) * (a / len), az: sy + (ey - sy) * (a / len),
+            bx: sx + (ex - sx) * (b / len), bz: sy + (ey - sy) * (b / len), r: th / 2,
+          })
+        }
       }
       const holes = (holesByWall.get(wall.id) ?? []).sort((p, q) => p.from - q.from)
       let cursor = 0
@@ -124,7 +133,7 @@ export function createHomeFromGeometry(geometry: any): { group: THREE.Group; roo
   }
 
   if (!rooms.length) return null
-  return { group, rooms }
+  return { group, rooms, colliders }
 }
 
 export async function loadActualBatisseGLB(glbBase64: string): Promise<THREE.Group | null> {

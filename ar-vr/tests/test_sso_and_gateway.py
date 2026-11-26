@@ -387,3 +387,51 @@ def test_production_refuses_the_public_dev_secret(monkeypatch):
 
     with pytest.raises(RuntimeError, match="INTEGRATION_JWT_SECRET"):
         asyncio.run(boot())
+
+
+def test_fabric_scan_forwards_the_image_with_the_users_own_wya_token():
+    seen = {}
+
+    async def scan(_self, token, image):
+        seen["sub"] = jwt.decode(token, options={"verify_signature": False})["sub"]
+        seen["image"] = image
+        return {"fabric": "denim", "category": "Bottoms", "color": "Blue"}
+
+    with Downstream():
+        email, _, r = _register()
+        h = _auth(r.json()["access_token"])
+        with patch("app.services.wya_service.WYAService.scan_fabric", scan):
+            ok = client.post("/api/wardrobe/fabric-scan", headers=h, json={"image": "data:image/png;base64," + "A" * 40})
+            short = client.post("/api/wardrobe/fabric-scan", headers=h, json={"image": "x"})
+    assert ok.status_code == 200 and ok.json()["classification"]["fabric"] == "denim"
+    assert seen["sub"] == email and seen["image"].startswith("data:image/png")
+    assert short.status_code == 422
+    assert client.post("/api/wardrobe/fabric-scan", json={"image": "A" * 40}).status_code == 401
+
+
+def test_wya_calls_carry_the_real_client_ip_for_per_user_rate_limits():
+    import asyncio
+    from app.request_context import client_ip_var
+    from app.services.wya_service import WYAService, _forward_client_ip
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["xff"] = request.headers.get("x-forwarded-for")
+        return httpx.Response(200, json={"status": "ready"})
+
+    svc = WYAService(base_url="http://wya.test")
+    svc.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), event_hooks={"request": [_forward_client_ip]})
+    token = client_ip_var.set("203.0.113.7")
+    try:
+        assert asyncio.run(svc.ping()) is True
+    finally:
+        client_ip_var.reset(token)
+    assert seen["xff"] == "203.0.113.7"
+
+
+def test_wya_rate_limit_is_reported_as_rate_limited_not_failed():
+    from app.auth import _classify
+    assert _classify(_status_error(429)) == "rate_limited"
+    assert _classify(httpx.ConnectError("down")) == "unavailable"
+    assert _classify(_status_error(500)) == "failed"

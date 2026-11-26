@@ -16,10 +16,10 @@ import time
 import jwt  # PyJWT for token validation
 from datetime import datetime, timezone
 from typing import Any, Dict, Generator
+import httpx
 from httpx import AsyncClient
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, HTTPException, Form, Depends
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import FastAPI, Request, HTTPException, Form, Depends, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func
@@ -28,6 +28,7 @@ from . import config
 from . import database  # noqa: F401
 from .schemas import IntegrationHealth  # noqa: F401
 from .services import batisse_service, wya_service, tryon_service, velaris_service  # noqa: F401
+from .auth import get_current_user, get_wya_token, clear_wya_token, get_tryon_user_id, router as auth_router
 from .services.batisse_service import get_batisse_service
 from .services.wya_service import get_wya_service
 from .services.tryon_service import get_tryon_service
@@ -36,19 +37,6 @@ from .services.velaris_service import get_velaris_service
 logger = logging.getLogger(__name__)
 
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
-    """Validate JWT token and return user_id."""
-    try:
-        payload = jwt.decode(token, config.INTEGRATION_JWT_SECRET, algorithms=["HS256"])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise jwt.PyJWTError("Token missing sub claim")
-        return user_id
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.PyJWTError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -56,6 +44,10 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Startup and shutdown for the integration service."""
+    if config.USING_DEV_JWT_SECRET:
+        if config.ORVYNE_ENV == "production":
+            raise RuntimeError("INTEGRATION_JWT_SECRET must be set in production; refusing to use the public dev secret")
+        logger.warning("Using the public dev JWT secret: anyone can forge tokens. Set INTEGRATION_JWT_SECRET before deploying.")
     # Startup
     config.ensure_dirs()
     database.init_db()
@@ -159,6 +151,9 @@ app.add_middleware(
 )
 
 
+app.include_router(auth_router)
+
+
 # ── Request Logging Middleware ────────────────────────────────────────────────
 
 @app.middleware("http")
@@ -221,498 +216,421 @@ async def health() -> IntegrationHealth:
     return IntegrationHealth(status=overall, services=services)
 
 
+# ── Downstream error mapping ──────────────────────────────────────────────────
+
+def downstream_error(service: str, exc: Exception) -> HTTPException:
+    """Map a failed downstream call to an honest HTTP error (never a 200)."""
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        detail = f"{service} returned {code}"
+        try:
+            body = exc.response.json()
+            msg = body.get("detail") or body.get("message") or (body.get("error") or {}).get("message")
+            if isinstance(msg, str):
+                detail += f": {msg[:160]}"
+        except Exception:
+            pass
+        if code in (400, 404, 409, 413, 415, 422):
+            return HTTPException(status_code=code, detail=detail)
+        if code in (401, 403):
+            return HTTPException(status_code=424, detail=f"{detail} (the {service} session was rejected; sign in again)")
+        if code == 503:
+            return HTTPException(status_code=503, detail=detail)
+        return HTTPException(status_code=502, detail=detail)
+    if isinstance(exc, (httpx.TransportError, httpx.TimeoutException)):
+        return HTTPException(status_code=503, detail=f"{service} is unavailable")
+    return HTTPException(status_code=502, detail=f"{service} call failed: {str(exc)[:100]}")
+
+
 # ── BATISSE — Floor plan to virtual home ──────────────────────────────────────
 
-@app.post(
-    "/api/batisse/upload",
-    tags=["batisse"],
-    summary="Upload a floor plan for BATISSE processing",
-)
-async def batisse_upload(
-    request: Request,
-    auth_user_id: str = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Delegate floor plan upload to BATISSE backend."""
-    try:
-        body = await request.json()
-        svc = get_batisse_service()
-        result = await svc.process_floor_plan(body)
-        return result
-    except Exception as e:
-        logger.error(f"BATISSE upload failed: {e}")
-        return {"success": False, "note": "BATISSE backend unavailable", "error": str(e)[:100]}
-
-
-@app.get(
-    "/api/batisse/projects/{project_id}/geometry",
-    tags=["batisse"],
-    summary="Get validated geometry for a BATISSE project",
-)
-async def batisse_get_geometry(auth_user_id: str = Depends(get_current_user), project_id: int = ...) -> Dict[str, Any]:
-    """Get validated geometry for a BATISSE project."""
-    # Resolve project_id from authenticated user's integration metadata
-    db = database.get_db_session()
-    try:
-        meta = db.query(IntegrationMetadata).filter_by(user_id=auth_user_id).first()
-        if meta and meta.batisse_project_id:
-            project_id = meta.batisse_project_id
-        # If project_id was explicitly provided in URL, use it; otherwise use user's linked project
-        svc = get_batisse_service()
-        result = await svc.get_geometry(project_id)
-        return result
-    except Exception:
-        return {"success": False, "note": "BATISSE geometry backend unavailable"}
-
-
-@app.get(
-    "/api/batisse/geometry",
-    tags=["batisse"],
-    summary="Get validated geometry for authenticated user's BATISSE project",
-)
-async def batisse_get_geometry_default(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Get validated geometry for authenticated user's BATISSE project."""
-    db = database.get_db_session()
-    try:
-        meta = db.query(IntegrationMetadata).filter_by(user_id=auth_user_id).first()
-        project_id = meta.batisse_project_id if meta and meta.batisse_project_id else 1
-        svc = get_batisse_service()
-        result = await svc.get_geometry(project_id)
-        return result
-    except Exception:
-        return {"success": False, "note": "BATISSE geometry backend unavailable"}
-
-
-@app.post(
-    "/api/batisse/projects/{project_id}/geometry/export-glb",
-    tags=["batisse"],
-    summary="Export BATISSE geometry as GLB/glTF",
-)
-async def batisse_export_glb(auth_user_id: str = Depends(get_current_user), project_id: int = ...) -> Dict[str, Any]:
-    """Export validated BATISSE geometry as GLB/glTF file."""
-    # Resolve project_id from authenticated user's integration metadata
-    db = database.get_db_session()
-    try:
-        meta = db.query(IntegrationMetadata).filter_by(user_id=auth_user_id).first()
-        if meta and meta.batisse_project_id:
-            project_id = meta.batisse_project_id
-        svc = get_batisse_service()
-        result = await svc.export_glb(project_id)
-        return result
-    except Exception:
-        return {"success": False, "note": "BATISSE GLB export backend unavailable"}
-
-
-@app.post(
-    "/api/batisse/export-glb",
-    tags=["batisse"],
-    summary="Export authenticated user's BATISSE geometry as GLB/glTF",
-)
-async def batisse_export_glb_default(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Export authenticated user's BATISSE geometry as GLB/glTF file."""
-    db = database.get_db_session()
-    try:
-        meta = db.query(IntegrationMetadata).filter_by(user_id=auth_user_id).first()
-        project_id = meta.batisse_project_id if meta and meta.batisse_project_id else 1
-        svc = get_batisse_service()
-        result = await svc.export_glb(project_id)
-        return result
-    except Exception:
-        return {"success": False, "note": "BATISSE GLB export backend unavailable"}
-
-@app.post(
-    "/api/batisse/projects/{project_id}/geometry/scale-reference",
-    tags=["batisse"],
-    summary="Set scale reference for BATISSE project",
-)
-async def batisse_set_scale_reference(project_id: int) -> Dict[str, Any]:
-    """Set scale reference (two points + real length) for BATISSE geometry."""
-    return {
-        "success": True,
-        "note": "Scale reference endpoint stub — Phase 1 placeholder",
-        "project_id": project_id,
-    }
-
-@app.post(
-    "/api/batisse/rooms",
-    tags=["batisse"],
-    summary="Create a new room in the BATISSE project",
-)
-async def batisse_create_room(request: Request) -> Dict[str, Any]:
-    """Create a new room in the BATISSE project."""
-    body = await request.json()
-    # Delegate to BATISSE service for floor plan processing
-    svc = get_batisse_service()
-    result = await svc.process_floor_plan(body)
-    return result
-
-@app.delete(
-    "/api/batisse/rooms/{room_id}",
-    tags=["batisse"],
-    summary="Delete a room from the BATISSE project",
-)
-async def batisse_delete_room(request: Request, room_id: str) -> Dict[str, Any]:
-    """Delete a room from the BATISSE project."""
-    try:
-        svc = get_batisse_service()
-        result = await svc.delete_room(room_id)
-        return result
-    except Exception:
-        return {"success": False, "note": "Failed to delete room"}
-
-@app.put(
-    "/api/batisse/rooms/{room_id}/dimensions",
-    tags=["batisse"],
-    summary="Update room dimensions in the BATISSE project",
-)
-async def batisse_update_room_dimensions(request: Request, room_id: str) -> Dict[str, Any]:
-    """Update room dimensions in the BATISSE project."""
-    body = await request.json()
-    try:
-        svc = get_batisse_service()
-        result = await svc.update_room_dimensions(room_id, body)
-        return result
-    except Exception:
-        return {"success": False, "note": "Failed to update room dimensions"}
-
-@app.post(
-    "/api/batisse/rooms/connect",
-    tags=["batisse"],
-    summary="Connect two rooms with a door in the BATISSE project",
-)
-async def batisse_connect_rooms(request: Request) -> Dict[str, Any]:
-    """Connect two rooms with a door in the BATISSE project."""
-    body = await request.json()
-    from_room = body.get("from_room")
-    to_room = body.get("to_room")
-    door_side = body.get("door_side", "front")
-    try:
-        # Record the connection using the service singleton
-        return {"success": True, "from_room": from_room, "to_room": to_room, "door_side": door_side}
-    except Exception:
-        return {"success": False, "note": "Failed to connect rooms"}
-
-
-@app.post(
-    "/api/navigation/set-position/{user_id}",
-    tags=["navigation"],
-    summary="Set user position in virtual home",
-)
-async def set_navigation_position(
-    user_id: str,
-    position: dict,
-    auth_user_id: str = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Set user position (x, y, z) and rotation (x, y, z, w) in the virtual home."""
-    user_id = auth_user_id
+def _linked_project_id(user_id: str) -> int | None:
     db = database.get_db_session()
     try:
         meta = db.query(database.IntegrationMetadata).filter_by(user_id=user_id).first()
-        if not meta:
+        return meta.batisse_project_id if meta else None
+    finally:
+        db.close()
+
+
+def _require_project(user_id: str) -> int:
+    pid = _linked_project_id(user_id)
+    if pid is None:
+        raise HTTPException(status_code=404, detail="No BATISSE home yet: upload a floor plan first")
+    return pid
+
+
+def _link_project(user_id: str, project_id: int) -> None:
+    db = database.get_db_session()
+    try:
+        meta = db.query(database.IntegrationMetadata).filter_by(user_id=user_id).first()
+        if meta is None:
             meta = database.IntegrationMetadata(user_id=user_id, room_assignments={})
             db.add(meta)
-        # Store navigation position in metadata
-        meta.room_assignments["last_position"] = position
+        meta.batisse_project_id = project_id
         db.commit()
-        return {
-            "success": True,
-            "user_id": user_id,
-            "position": position,
-            "note": "Navigation position recorded.",
-        }
+    finally:
+        db.close()
+
+
+MAX_PLAN_BYTES = 25 * 1024 * 1024
+
+
+@app.post("/api/batisse/upload", tags=["batisse"], summary="Upload a floor plan and generate the user's home")
+async def batisse_upload(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+    auth_user_id: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Create (or reuse) the user's BATISSE project, upload the plan image/PDF and run detection."""
+    content = await file.read(MAX_PLAN_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=422, detail="The uploaded file is empty")
+    if len(content) > MAX_PLAN_BYTES:
+        raise HTTPException(status_code=413, detail="Floor plan exceeds the 25 MB limit")
+    svc = get_batisse_service()
+    try:
+        project_id = _linked_project_id(auth_user_id)
+        if project_id is None:
+            project = await svc.create_project(name.strip() or "My ORVYNE home")
+            project_id = project["id"]
+            _link_project(auth_user_id, project_id)
+        upload = await svc.upload_plan(project_id, file.filename or "plan.png", content, file.content_type or "")
+        processed = await svc.process_plan(project_id, upload["id"], replace_existing=True)
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to save position: {str(e)[:100]}")
-    finally:
-        db.close()
+        logger.error("BATISSE upload failed: %s", e)
+        raise downstream_error("BATISSE", e)
+    geometry = processed.get("geometry", {})   # BATISSE returns the FloorPlanGeometry itself
+    return {
+        "success": True,
+        "project_id": project_id,
+        "upload_id": upload["id"],
+        "units": geometry.get("units"),
+        # 3D needs real-world metres; pixel geometry still needs a scale (see /api/batisse/scale-from-longest-wall)
+        "ready_for_3d": geometry.get("units") == "m",
+        "room_count": sum(len(f.get("rooms", [])) for f in geometry.get("floors", [])),
+    }
 
-@app.post(
-    "/api/navigation/set-room/{user_id}/{room_id}",
-    tags=["navigation"],
-    summary="Set current room for user",
-)
-async def set_current_room(
-    user_id: str,
-    room_id: str,
-    auth_user_id: str = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Set the current room the user is in."""
-    # Use authenticated user ID, not URL parameter
-    user_id = auth_user_id
-    db = database.get_db_session()
+
+@app.get("/api/batisse/geometry", tags=["batisse"], summary="Validated geometry of the signed-in user's home")
+async def batisse_get_geometry_default(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    project_id = _require_project(auth_user_id)
     try:
-        # Check if user exists
-        user = db.query(database.Users).filter_by(id=user_id).first()
-        if not user:
-            user = database.Users(id=user_id, username=f"user_{user_id}")
-            db.add(user)
-        
-        # Save room assignment
-        room_save = db.query(database.RoomSaves).filter_by(user_id=user_id, room_id=room_id).first()
-        if not room_save:
-            room_save = database.RoomSaves(user_id=user_id, room_id=room_id, room_name=room_id)
-            db.add(room_save)
-        else:
-            room_save.room_name = room_id
-            room_save.updated_at = func.now()
-        
-        db.commit()
-        return {
-            "success": True,
-            "user_id": user_id,
-            "room_id": room_id,
-            "note": "Current room recorded.",
-        }
-    finally:
-        db.close()
-
-
-@app.get(
-    "/api/navigation/get-position/{user_id}",
-    tags=["navigation"],
-    summary="Get user position in virtual home",
-)
-async def get_navigation_position(
-    user_id: str,
-    auth_user_id: str = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Get current user position and rotation."""
-    # Use authenticated user ID, not URL parameter
-    user_id = auth_user_id
-    db = database.get_db_session()
-    try:
-        # Check IntegrationMetadata for saved position
-        meta = db.query(database.IntegrationMetadata).filter_by(user_id=user_id).first()
-        saved_pos = meta.room_assignments.get("last_position") if meta and meta.room_assignments else None
-        
-        if saved_pos:
-            return {
-                "success": True,
-                "user_id": user_id,
-                "position": saved_pos,
-                "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
-                "note": "Saved position from previous session.",
-            }
-        
-        # Default initial position
-        return {
-            "success": True,
-            "user_id": user_id,
-            "position": {"x": 0.0, "y": 1.6, "z": 0.0},
-            "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
-            "note": "Default initial position.",
-        }
-    finally:
-        db.close()
-
-
-# ── Phase 2: Room Interactions ───────────────────────────────────────────────
-
-@app.post(
-    "/api/room/interact/{room_id}/{action}",
-    tags=["room"],
-    summary="Interact with a room object",
-)
-async def room_interact(
-    room_id: str,
-    action: str,
-    auth_user_id: str = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Handle interaction with room objects (door, window, furniture)."""
-    db = database.get_db_session()
-    try:
-        user = db.query(database.Users).filter_by(id=auth_user_id).first()
-        if not user:
-            user = database.Users(id=auth_user_id)
-            db.add(user)
-        db.commit()
-        return {
-            "success": True,
-            "user_id": auth_user_id,
-            "room_id": room_id,
-            "action": action,
-            "note": f"Interaction '{action}' recorded for room {room_id}.",
-        }
+        return await get_batisse_service().get_geometry(project_id)
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Room interaction failed: {str(e)[:100]}")
-    finally:
-        db.close()
+        raise downstream_error("BATISSE", e)
 
 
-@app.post(
-    "/api/room/door/open/{from_room}/{to_room}",
-    tags=["room"],
-    summary="Open a door to another room",
-)
-async def open_door(
-    from_room: str,
-    to_room: str,
-    auth_user_id: str = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Handle door opening between rooms."""
+@app.get("/api/batisse/projects/{project_id}/geometry", tags=["batisse"],
+         summary="Geometry for a project (only the user's own)")
+async def batisse_get_geometry(project_id: int, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    if project_id != _linked_project_id(auth_user_id):
+        raise HTTPException(status_code=403, detail="That BATISSE project does not belong to you")
+    try:
+        return await get_batisse_service().get_geometry(project_id)
+    except Exception as e:
+        raise downstream_error("BATISSE", e)
+
+
+class ScaleReferenceBody(BaseModel):
+    p1: list[float] = Field(min_length=2, max_length=2)
+    p2: list[float] = Field(min_length=2, max_length=2)
+    length: float = Field(gt=0)
+    unit: str = "m"
+
+
+@app.post("/api/batisse/scale-reference", tags=["batisse"], summary="Set the real-world scale of the user's plan")
+async def batisse_set_scale_reference(body: ScaleReferenceBody, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    project_id = _require_project(auth_user_id)
+    try:
+        return await get_batisse_service().set_scale_reference(project_id, body.p1, body.p2, body.length, body.unit)
+    except Exception as e:
+        raise downstream_error("BATISSE", e)
+
+
+class ScaleFromWallBody(BaseModel):
+    length: float = Field(gt=0, le=1000)
+    unit: str = "m"
+
+
+@app.post("/api/batisse/scale-from-longest-wall", tags=["batisse"],
+          summary="Set scale by giving the real length of the plan's longest wall")
+async def batisse_scale_from_longest_wall(body: ScaleFromWallBody, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Convenience for users who cannot pick two plan points: the longest detected wall
+    becomes the scale reference, using BATISSE's own scale endpoint."""
+    project_id = _require_project(auth_user_id)
+    svc = get_batisse_service()
+    try:
+        current = await svc.get_geometry(project_id)
+        floors = current.get("geometry", {}).get("floors", [])
+        walls = [w for f in floors for w in f.get("walls", [])]
+        if not walls:
+            raise HTTPException(status_code=422, detail="No walls were detected in your floor plan")
+        longest = max(walls, key=lambda w: ((w["end"][0] - w["start"][0]) ** 2 + (w["end"][1] - w["start"][1]) ** 2))
+        await svc.set_scale_reference(project_id, longest["start"], longest["end"], body.length, body.unit)
+        return await svc.get_geometry(project_id)
+    except Exception as e:
+        raise downstream_error("BATISSE", e)
+
+
+_NOT_IMPLEMENTED_GLB = ("BATISSE has no server-side GLB export (its viewer exports in the browser). "
+                        "Build the scene from GET /api/batisse/geometry instead.")
+
+
+@app.post("/api/batisse/export-glb", tags=["batisse"], summary="Not implemented")
+async def batisse_export_glb_default(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED_GLB)
+
+
+@app.post("/api/batisse/projects/{project_id}/geometry/export-glb", tags=["batisse"], summary="Not implemented")
+async def batisse_export_glb(project_id: int, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED_GLB)
+
+
+_ROOM_EDIT_501 = "Room editing is not implemented in the gateway; BATISSE edits geometry as a whole (PUT /geometry)."
+
+
+@app.post("/api/batisse/rooms", tags=["batisse"], summary="Not implemented")
+async def batisse_create_room(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_ROOM_EDIT_501)
+
+
+@app.delete("/api/batisse/rooms/{room_id}", tags=["batisse"], summary="Not implemented")
+async def batisse_delete_room(room_id: str, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_ROOM_EDIT_501)
+
+
+@app.put("/api/batisse/rooms/{room_id}/dimensions", tags=["batisse"], summary="Not implemented")
+async def batisse_update_room_dimensions(room_id: str, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_ROOM_EDIT_501)
+
+
+@app.post("/api/batisse/rooms/connect", tags=["batisse"], summary="Not implemented")
+async def batisse_connect_rooms(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_ROOM_EDIT_501)
+
+
+# ── Navigation (persisted per user in player_state) ───────────────────────────
+
+class Vec3(BaseModel):
+    x: float
+    y: float
+    z: float
+
+
+class Quat(BaseModel):
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+    w: float = 1.0
+
+
+class NavigationBody(BaseModel):
+    position: Vec3 | None = None
+    rotation: Quat | None = None
+    room_id: str | None = Field(default=None, max_length=255)
+
+
+def _finite(*vals: float) -> bool:
+    return all(isinstance(v, (int, float)) and v == v and abs(v) != float("inf") for v in vals)
+
+
+def _player_to_dict(ps) -> Dict[str, Any]:
+    if ps is None:
+        return {"position": {"x": 0.0, "y": 1.6, "z": 0.0}, "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                "room_id": None, "saved": False}
+    return {"position": {"x": ps.pos_x, "y": ps.pos_y, "z": ps.pos_z},
+            "rotation": {"x": ps.rot_x, "y": ps.rot_y, "z": ps.rot_z, "w": ps.rot_w},
+            "room_id": ps.current_room, "saved": True}
+
+
+def _save_player(user_id: str, body: NavigationBody) -> Dict[str, Any]:
+    if body.position and not _finite(body.position.x, body.position.y, body.position.z):
+        raise HTTPException(status_code=422, detail="position must be finite numbers")
+    if body.rotation and not _finite(body.rotation.x, body.rotation.y, body.rotation.z, body.rotation.w):
+        raise HTTPException(status_code=422, detail="rotation must be finite numbers")
     db = database.get_db_session()
     try:
-        user = db.query(database.Users).filter_by(id=auth_user_id).first()
-        if not user:
-            user = database.Users(id=auth_user_id)
-            db.add(user)
-        # Record door connection
+        ps = db.query(database.PlayerState).filter_by(user_id=user_id).first()
+        if ps is None:
+            ps = database.PlayerState(user_id=user_id)
+            db.add(ps)
+        if body.position:
+            ps.pos_x, ps.pos_y, ps.pos_z = body.position.x, body.position.y, body.position.z
+        if body.rotation:
+            ps.rot_x, ps.rot_y, ps.rot_z, ps.rot_w = body.rotation.x, body.rotation.y, body.rotation.z, body.rotation.w
+        if body.room_id is not None:
+            ps.current_room = body.room_id
         db.commit()
-        return {
-            "success": True,
-            "user_id": auth_user_id,
-            "from_room": from_room,
-            "to_room": to_room,
-            "note": f"Door opened from {from_room} to {to_room}.",
-        }
-    except Exception as e:
+        db.refresh(ps)
+        return _player_to_dict(ps)
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Door open failed: {str(e)[:100]}")
+        raise
     finally:
         db.close()
 
 
-@app.post(
-    "/api/room/window/toggle/{room_id}",
-    tags=["room"],
-    summary="Toggle window visibility/state",
-)
-async def toggle_window(
-    room_id: str,
-    is_open: bool = True,
-    auth_user_id: str = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Handle window state changes."""
+def _load_player(user_id: str) -> Dict[str, Any]:
     db = database.get_db_session()
     try:
-        user = db.query(database.Users).filter_by(id=auth_user_id).first()
-        if not user:
-            user = database.Users(id=auth_user_id)
-            db.add(user)
-        db.commit()
-        return {
-            "success": True,
-            "user_id": auth_user_id,
-            "room_id": room_id,
-            "is_open": is_open,
-            "note": f"Window state updated in room {room_id}.",
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Window toggle failed: {str(e)[:100]}")
+        return _player_to_dict(db.query(database.PlayerState).filter_by(user_id=user_id).first())
     finally:
         db.close()
+
+
+@app.get("/api/navigation/state", tags=["navigation"], summary="Saved position, rotation and room")
+async def get_navigation_state(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    return {"success": True, "user_id": auth_user_id, **_load_player(auth_user_id)}
+
+
+@app.put("/api/navigation/state", tags=["navigation"], summary="Save position, rotation and/or room")
+async def put_navigation_state(body: NavigationBody, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    return {"success": True, "user_id": auth_user_id, **_save_player(auth_user_id, body)}
+
+
+# Legacy path-style routes. The {user_id} segment is ignored: the signed-in
+# user (from the token) is always the owner.
+
+@app.post("/api/navigation/set-position/{user_id}", tags=["navigation"], summary="Set position (legacy path)")
+async def set_navigation_position(user_id: str, position: Vec3, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    return {"success": True, "user_id": auth_user_id, **_save_player(auth_user_id, NavigationBody(position=position))}
+
+
+@app.post("/api/navigation/set-room/{user_id}/{room_id}", tags=["navigation"], summary="Set current room (legacy path)")
+async def set_current_room(user_id: str, room_id: str, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    return {"success": True, "user_id": auth_user_id, **_save_player(auth_user_id, NavigationBody(room_id=room_id))}
+
+
+@app.get("/api/navigation/get-position/{user_id}", tags=["navigation"], summary="Get position (legacy path)")
+async def get_navigation_position(user_id: str, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    return {"success": True, "user_id": auth_user_id, **_load_player(auth_user_id)}
+
+
+# ── Room interactions (not implemented) ───────────────────────────────────────
+
+_ROOM_INTERACT_501 = "Room interactions are not implemented yet; nothing is recorded."
+
+
+@app.post("/api/room/interact/{room_id}/{action}", tags=["room"], summary="Not implemented")
+async def room_interact(room_id: str, action: str, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_ROOM_INTERACT_501)
+
+
+@app.post("/api/room/door/open/{from_room}/{to_room}", tags=["room"], summary="Not implemented")
+async def open_door(from_room: str, to_room: str, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_ROOM_INTERACT_501)
+
+
+@app.post("/api/room/window/toggle/{room_id}", tags=["room"], summary="Not implemented")
+async def toggle_window(room_id: str, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    raise HTTPException(status_code=501, detail=_ROOM_INTERACT_501)
 
 
 # ── WYA — Wardrobe integration ────────────────────────────────────────────────
 
-@app.post(
-    "/api/wardrobe/browse",
-    tags=["wardrobe"],
-    summary="Browse user's wardrobe via WYA integration",
-)
-async def wardrobe_browse(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Browse the user's wardrobe via WYA integration."""
-    from app.services.wya_service import get_wya_service
+async def _wya_call(user_id: str, fn):
+    """Run `fn(token)` with the user's stored WYA session, mapping failures honestly."""
+    token = get_wya_token(user_id)
     try:
-        svc = get_wya_service()
-        result = await svc.get_wardrobe(auth_user_id)
-    except Exception:
-        result = {"success": False, "note": "WYA backend unavailable"}
-    return result
+        return await fn(token)
+    except Exception as e:
+        err = downstream_error("WYA", e)
+        if err.status_code == 424:
+            clear_wya_token(user_id)
+        raise err
 
-@app.post(
-    "/api/wardrobe/outfit-recommendations",
-    tags=["wardrobe"],
-    summary="Get outfit recommendations from WYA AI",
-)
+
+@app.get("/api/wardrobe", tags=["wardrobe"], summary="The signed-in user's WYA wardrobe")
+@app.post("/api/wardrobe/browse", tags=["wardrobe"], summary="The signed-in user's WYA wardrobe")
+async def wardrobe_browse(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    items = await _wya_call(auth_user_id, lambda t: get_wya_service().get_wardrobe(t))
+    return {"source": "wya", "count": len(items), "items": items}
+
+
+class OutfitRecommendBody(BaseModel):
+    items: list[dict] | None = None  # defaults to the user's whole WYA wardrobe
+
+
+@app.post("/api/wardrobe/outfit-recommendations", tags=["wardrobe"], summary="Outfit recommendations from WYA")
 async def wardrobe_outfit_recommendations(
+    body: OutfitRecommendBody | None = None,
     auth_user_id: str = Depends(get_current_user),
-    occasion: str | None = None,
-    weather: str | None = None,
 ) -> Dict[str, Any]:
-    """Get AI-powered outfit recommendations from WYA."""
-    from app.services.wya_service import get_wya_service
-    try:
-        svc = get_wya_service()
-        result = await svc.get_outfit_recommendations(auth_user_id, occasion, weather)
-    except Exception:
-        result = {"success": False, "note": "WYA backend unavailable"}
-    return result
+    async def run(token: str):
+        items = (body.items if body and body.items else None) or await get_wya_service().get_wardrobe(token)
+        if not items:
+            raise HTTPException(status_code=422, detail="Your WYA wardrobe is empty; add items first")
+        return await get_wya_service().curate_outfits(token, items)
+    return {"source": "wya", "recommendations": await _wya_call(auth_user_id, run)}
+
+
+class OutfitScoreBody(BaseModel):
+    outfit: dict
+    style_dna: dict | None = None
+    wear_history: list[dict] | None = None
+    color_preferences: list[str] | None = None
+
+
+@app.post("/api/wardrobe/outfit-score", tags=["wardrobe"], summary="Score an outfit with WYA")
+async def wardrobe_outfit_score(body: OutfitScoreBody, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    payload = body.model_dump(exclude_none=True)
+    return {"source": "wya", "score": await _wya_call(auth_user_id, lambda t: get_wya_service().score_outfit(t, payload))}
 
 
 # ── TryOn — Virtual fitting room ──────────────────────────────────────────────
 
-@app.post(
-    "/api/tryon/generate",
-    tags=["tryon"],
-    summary="Generate try-on preview for a garment",
-)
-async def tryon_generate(
-    request: Request,
-    auth_user_id: str = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """Generate a try-on preview using the TryOn pipeline."""
-    body = await request.json()
-    garment_image_url = body.get("garment_image_url", "")
-    avatar_params = body.get("avatar_params", {})
+class TryOnBody(BaseModel):
+    garment_image_url: str = Field(min_length=1, max_length=2000)
+    avatar: str = "feminine"        # feminine | masculine | neutral
+    category: str = "top"           # top | dress | jacket | bottom
+
+
+@app.post("/api/tryon/generate", tags=["tryon"], summary="Generate an image-based try-on preview")
+async def tryon_generate(body: TryOnBody, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Image-based try-on on TryOn's stand-in body (not a 3D cloth simulation)."""
     svc = get_tryon_service()
     try:
-        result = await svc.generate_tryon(garment_image_url, avatar_params, auth_user_id)
-        return result
+        tryon_id = await get_tryon_user_id(auth_user_id)
+        try:
+            result = await svc.generate_tryon(body.garment_image_url, body.avatar, body.category, tryon_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 401:
+                raise
+            # TryOn forgot this guest (e.g. its DB was reset): re-create once and retry.
+            tryon_id = await get_tryon_user_id(auth_user_id, force_new=True)
+            result = await svc.generate_tryon(body.garment_image_url, body.avatar, body.category, tryon_id)
     except Exception as e:
-        return {"success": False, "error": str(e)[:100]}
+        raise downstream_error("TryOn", e)
+    return {"source": "tryon", "pipeline": "image-based", **result}
 
 
-@app.get(
-    "/api/tryon/status",
-    tags=["tryon"],
-    summary="Check TryOn pipeline readiness status",
-)
+@app.get("/api/tryon/status", tags=["tryon"], summary="TryOn pipeline readiness")
 async def tryon_status(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Check the TryOn pipeline readiness status."""
-    # Check TryOn service status via the service adapter
     try:
-        from app.services.tryon_service import get_tryon_service
-        svc = get_tryon_service()
-        status = await svc.ping()
-        return {"status": "healthy" if status else "unhealthy", "pipeline": "image-based"}
-    except Exception:
-        return {"status": "unhealthy", "pipeline": "image-based", "initializing": True}
+        return {"source": "tryon", "pipeline": "image-based", **await get_tryon_service().get_tryon_status()}
+    except Exception as e:
+        raise downstream_error("TryOn", e)
 
 
 # ── VELARIS — Jewellery boutique ──────────────────────────────────────────────
 
-@app.post(
-    "/api/jewellery/generate-design",
-    tags=["jewellery"],
-    summary="Generate a jewellery design via VELARIS AI",
-)
+@app.post("/api/jewellery/generate-design", tags=["jewellery"], summary="Generate a jewellery design via VELARIS AI")
 async def jewellery_generate_design(req: dict, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Generate a jewellery design via VELARIS AI."""
     try:
-        from app.services.velaris_service import get_velaris_service
-        svc = get_velaris_service()
-        result = await svc.generate_design(req)
-        return result
-    except Exception:
-        return {"error": "VELARIS backend unavailable in test environment"}
+        return await get_velaris_service().generate_design(req)
+    except Exception as e:
+        raise downstream_error("VELARIS", e)
 
 
-@app.get(
-    "/api/jewellery/designs",
-    tags=["jewellery"],
-    summary="List available jewellery designs from VELARIS",
-)
+@app.get("/api/jewellery/designs", tags=["jewellery"], summary="VELARIS design trends")
 async def jewellery_list_designs(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """List available jewellery designs from VELARIS backend."""
     try:
-        from app.services.velaris_service import get_velaris_service
-        svc = get_velaris_service()
-        result = await svc.list_designs()
-        return result
-    except Exception:
-        return {"error": "VELARIS backend unavailable in test environment"}
+        return await get_velaris_service().list_designs()
+    except Exception as e:
+        raise downstream_error("VELARIS", e)
 
 
 # ── VELARIS — 3D jewellery mesh generation ──────────────────────────────────
@@ -749,38 +667,25 @@ class LunaChatBody(BaseModel):
     """Request body for the gateway's Luna chat proxy."""
     message: str = Field(min_length=1, max_length=2000)
     intent: str = "outfit-help"            # WYA supports: outfit-help, gap-analysis
-    wya_token: str | None = None            # the user's WYA JWT (never sent in the URL)
 
 
-@app.post(
-    "/api/luna/chat",
-    tags=["luna"],
-    summary="Chat with Luna AI stylist (proxied to WYA)",
-)
+@app.post("/api/luna/chat", tags=["luna"], summary="Chat with Luna AI stylist (proxied to WYA)")
 async def luna_chat(body: LunaChatBody, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
-    """Proxy a Luna chat turn to WYA's /api/luna/chat.
+    """Proxy a Luna chat turn to WYA using the signed-in user's linked WYA session.
 
-    The caller must be authenticated with an ORVYNE token. WYA keeps its own
-    authentication, so the user's WYA JWT is supplied in the body and
-    forwarded as a Bearer header. Downstream failures are returned as real
-    HTTP errors, never as a 200 with an error string.
+    Downstream failures are real HTTP errors (424 not linked / expired,
+    503 WYA down), never a 200 with an error string.
     """
-    if not body.wya_token:
-        raise HTTPException(status_code=400, detail="wya_token is required: Luna styling uses the user's WYA account")
-    try:
+    async def run(token: str):
         async with AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 f"{config.WYA_BASE_URL}/api/luna/chat",
                 json={"message": body.message, "intent": body.intent},
-                headers={"Authorization": f"Bearer {body.wya_token}"},
+                headers={"Authorization": f"Bearer {token}"},
             )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"WYA unreachable: {str(e)[:100]}")
-    if response.status_code in (401, 403):
-        raise HTTPException(status_code=401, detail="WYA rejected the supplied token")
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"WYA returned {response.status_code}")
-    data = response.json()
+            response.raise_for_status()
+            return response.json()
+    data = await _wya_call(auth_user_id, run)
     return {"reply": data.get("text", ""), "outfits": data.get("outfits"), "gap_analysis": data.get("gapAnalysis")}
 
 
@@ -926,18 +831,18 @@ def furniture_save(
     """Save a furniture placement (type, room_id, position, rotation)."""
     db = database.get_db_session()
     try:
-        save = database.FurnitureSaves(
-            user_id=auth_user_id,
-            furniture_id=furniture.get("furniture_id", f"furn-{int(time.time())}"),
-            furniture_type=furniture.get("furniture_type", ""),
-            room_id=furniture.get("room_id", "free"),
-            position_x=furniture.get("position_x", 0.0),
-            position_y=furniture.get("position_y", 0.0),
-            position_z=furniture.get("position_z", 0.0),
-            rotation_y=furniture.get("rotation_y", 0.0),
-            world_state=furniture.get("world_state", {}),
-        )
-        db.add(save)
+        fid = furniture.get("furniture_id", f"furn-{int(time.time() * 1000)}")
+        save = db.query(database.FurnitureSaves).filter_by(user_id=auth_user_id, furniture_id=fid).first()
+        if save is None:
+            save = database.FurnitureSaves(user_id=auth_user_id, furniture_id=fid)
+            db.add(save)
+        save.furniture_type = furniture.get("furniture_type", save.furniture_type or "")
+        save.room_id = furniture.get("room_id", save.room_id or "free")
+        save.position_x = furniture.get("position_x", save.position_x or 0.0)
+        save.position_y = furniture.get("position_y", save.position_y or 0.0)
+        save.position_z = furniture.get("position_z", save.position_z or 0.0)
+        save.rotation_y = furniture.get("rotation_y", save.rotation_y or 0.0)
+        save.world_state = furniture.get("world_state", save.world_state or {})
         db.commit()
         return {"success": True, "furniture_id": save.furniture_id}
     except Exception as e:
@@ -1007,7 +912,8 @@ def assign_room_function(
             )
             db.add(meta)
         
-        assignments = meta.room_assignments or {}
+        # Copy: mutating the stored dict in place is not detected by SQLAlchemy
+        assignments = dict(meta.room_assignments or {})
         assignments[assignment["room_id"]] = assignment["function"]
         meta.room_assignments = assignments
         db.commit()
@@ -1021,6 +927,41 @@ def assign_room_function(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to assign room function: {str(e)[:100]}")
+    finally:
+        db.close()
+
+
+@app.get(
+    "/api/integrate/room-assignments",
+    tags=["integration"],
+    summary="The signed-in user's saved room functions",
+)
+def get_room_assignments(auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    db = database.get_db_session()
+    try:
+        meta = db.query(database.IntegrationMetadata).filter_by(user_id=auth_user_id).first()
+        assignments = dict(meta.room_assignments or {}) if meta else {}
+        return {"success": True, "assignments": assignments}
+    finally:
+        db.close()
+
+
+@app.delete(
+    "/api/integrate/room-assignments/{room_id}",
+    tags=["integration"],
+    summary="Remove a saved room function",
+)
+def delete_room_assignment(room_id: str, auth_user_id: str = Depends(get_current_user)) -> Dict[str, Any]:
+    db = database.get_db_session()
+    try:
+        meta = db.query(database.IntegrationMetadata).filter_by(user_id=auth_user_id).first()
+        assignments = dict(meta.room_assignments or {}) if meta else {}
+        if room_id not in assignments:
+            raise HTTPException(status_code=404, detail="No assignment for that room")
+        del assignments[room_id]
+        meta.room_assignments = assignments   # new dict object so SQLAlchemy sees the change
+        db.commit()
+        return {"success": True, "assignments": assignments}
     finally:
         db.close()
 

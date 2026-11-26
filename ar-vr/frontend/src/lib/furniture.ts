@@ -87,7 +87,8 @@ export function buildFurnitureForRooms(rooms: any[]): FurnitureItem[] {
     const roomId = String(room?.room_id ?? i)
     const name = `${room?.room_name ?? ''} ${room?.room_function ?? ''}`.toLowerCase()
     const angle = (i / Math.max(n, 1)) * Math.PI * 2
-    const [ox, oz] = n > 1 ? [Math.cos(angle) * 2.5, Math.sin(angle) * 2.5] : [0, 0]
+    const c = room?.center
+    const [ox, oz] = c ? [c.x, c.z] : n > 1 ? [Math.cos(angle) * 2.5, Math.sin(angle) * 2.5] : [0, 0]
     for (const rule of ROOM_RULES) {
       if (!rule.keywords.some(k => name.includes(k))) continue
       for (const [type, [x, y, z]] of rule.items) {

@@ -90,12 +90,12 @@ class TestBatisseEndpoints:
     def test_batisse_get_geometry_requires_id(self):
         """BATISSE geometry endpoint requires project ID."""
         response = auth_client.get("/api/batisse/geometry")
-        assert response.status_code in (200, 422)
+        assert response.status_code == 404  # no home uploaded yet
 
     def test_batisse_export_glb_requires_id(self):
         """BATISSE GLB export endpoint requires project ID."""
         response = auth_client.post("/api/batisse/export-glb")
-        assert response.status_code in (200, 422)
+        assert response.status_code == 501  # BATISSE has no server-side GLB export
 
 
 # ── WYA endpoints ────────────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ class TestWYAEndpoints:
     def test_wardrobe_browse_accepts_post(self):
         """WARDROBE browse endpoint accepts POST with user_id."""
         response = auth_client.post("/api/wardrobe/browse", json={"user_id": "user-123"})
-        assert response.status_code in (200, 422)
+        assert response.status_code == 424  # no WYA session linked
 
     def test_outfit_recommendations_accepts_post(self):
         """OUTFIT recommendations endpoint accepts POST."""
@@ -114,7 +114,7 @@ class TestWYAEndpoints:
             "/api/wardrobe/outfit-recommendations",
             json={"user_id": "user-123", "occasion": "casual"},
         )
-        assert response.status_code in (200, 422)
+        assert response.status_code == 424  # no WYA session linked
 
 
 # ── TryOn endpoints ──────────────────────────────────────────────────────────
@@ -131,12 +131,12 @@ class TestTryOnEndpoints:
                 "avatar_params": {"gender": "female"},
             },
         )
-        assert response.status_code in (200, 422)
+        assert response.status_code == 503  # TryOn not running
 
     def test_tryon_status_get(self):
         """TRY-ON status endpoint accepts GET."""
         response = auth_client.get("/api/tryon/status")
-        assert response.status_code in (200, 422)
+        assert response.status_code == 503  # TryOn not running
 
 
 # ── VELARIS endpoints ─────────────────────────────────────────────────────────
@@ -155,12 +155,12 @@ class TestVELARISEndpoints:
                 "budget": "Balanced",
             },
         )
-        assert response.status_code in (200, 422)
+        assert response.status_code == 503  # VELARIS not running
 
     def test_list_designs_get(self):
         """VELARIS list-designs endpoint accepts GET."""
         response = auth_client.get("/api/jewellery/designs")
-        assert response.status_code in (200, 422)
+        assert response.status_code == 503  # VELARIS not running
 
 
 # ── Cross-project integration endpoints ───────────────────────────────────────
@@ -306,12 +306,12 @@ class TestAuth:
     def test_authenticated_wardrobe_works(self):
         """WARDROBE browse works with authentication."""
         response = auth_client.post("/api/wardrobe/browse", json={"user_id": "user-123"})
-        assert response.status_code in (200, 422)
+        assert response.status_code == 424  # no WYA session linked
 
     def test_authenticated_tryon_status_works(self):
         """TRY-ON status works with authentication."""
         response = auth_client.get("/api/tryon/status")
-        assert response.status_code in (200, 422)
+        assert response.status_code == 503  # TryOn not running
 
 
 # ── Two-user isolation ──────────────────────────────────────────────────────

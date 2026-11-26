@@ -213,6 +213,65 @@ class FurnitureSaves(BaseModelMixin, Base):
     __table_args__ = ()
 
 
+# ── Player state (navigation persistence) ─────────────────────────────────────
+
+class PlayerState(Base):
+    """Where the user is in their home: one row per user."""
+
+    __tablename__ = "player_state"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(255), nullable=False, unique=True, index=True)
+    pos_x = Column(Float, nullable=False, default=0.0)
+    pos_y = Column(Float, nullable=False, default=1.6)
+    pos_z = Column(Float, nullable=False, default=0.0)
+    rot_x = Column(Float, nullable=False, default=0.0)
+    rot_y = Column(Float, nullable=False, default=0.0)
+    rot_z = Column(Float, nullable=False, default=0.0)
+    rot_w = Column(Float, nullable=False, default=1.0)
+    current_room = Column(String(255), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+# ── Single sign-on: ORVYNE accounts and downstream links ──────────────────────
+
+class Account(Base):
+    """The one ORVYNE login. `id` is the JWT `sub` used everywhere in the gateway.
+
+    Only a salted password hash is stored. Downstream projects keep their own
+    user databases; see DownstreamLink for how an account maps onto them.
+    """
+
+    __tablename__ = "accounts"
+
+    id = Column(String(64), primary_key=True)  # uuid4 hex
+    email = Column(String(255), nullable=False, unique=True, index=True)
+    full_name = Column(String(255), nullable=False, default="")
+    password_hash = Column(String(512), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class DownstreamLink(Base):
+    """Maps an ORVYNE account to its account inside one downstream project.
+
+    wya    -> `token` holds the user's WYA JWT (obtained at ORVYNE sign-in).
+    tryon  -> `external_user_id` holds the TryOn guest user id (sent as X-User-Id).
+    """
+
+    __tablename__ = "downstream_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(64), nullable=False, index=True)
+    service = Column(String(32), nullable=False)
+    external_user_id = Column(String(255), nullable=True)
+    token = Column(Text, nullable=True)
+    token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (Index("ux_downstream_user_service", "user_id", "service", unique=True),)
+
+
 # ── Engine helpers ────────────────────────────────────────────────────────────
 
 _schema_ready = False

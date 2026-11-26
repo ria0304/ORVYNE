@@ -45,14 +45,30 @@ class BatisseService:
 
     # ── Floor plan upload ────────────────────────────────────────────────
 
-    async def process_floor_plan(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        """Delegate floor plan processing to BATISSE backend.
+    async def create_project(self, name: str, description: str = "") -> Dict[str, Any]:
+        """Create a BATISSE project (POST /api/projects)."""
+        response = await self.client.post(
+            f"{self.base_url}/api/projects", json={"name": name, "description": description}
+        )
+        response.raise_for_status()
+        return response.json()
 
-        In Phase 1, this forwards a minimal JSON payload. Full multipart/
-        form data upload with floor plan image is handled by the BATISSE
-        frontend and /api/projects endpoint.
-        """
-        response = await self.client.post(f"{self.base_url}/api/projects", json=body)
+    async def upload_plan(self, project_id: int, filename: str, content: bytes, content_type: str) -> Dict[str, Any]:
+        """Upload the floor-plan image/PDF itself (multipart)."""
+        response = await self.client.post(
+            f"{self.base_url}/api/projects/{project_id}/uploads",
+            files={"file": (filename, content, content_type or "application/octet-stream")},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def process_plan(self, project_id: int, upload_id: int, page_index: int = 0,
+                           replace_existing: bool = False) -> Dict[str, Any]:
+        """Run BATISSE's detection pipeline; the result is stored as the project's geometry."""
+        response = await self.client.post(
+            f"{self.base_url}/api/projects/{project_id}/process",
+            json={"upload_id": upload_id, "page_index": page_index, "replace_existing": replace_existing},
+        )
         response.raise_for_status()
         return response.json()
 

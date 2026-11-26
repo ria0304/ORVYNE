@@ -1,74 +1,74 @@
-import os
+import logging
+from typing import Any, List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from typing import Optional, List, Any
 
-# Adjust these imports depending on your exact backend directory naming structure
-from routers.auth_router import get_current_user  # Assuming you have an auth dependency
-from routers.ai_router import curate_outfits_engine, gap_analysis_engine 
+from auth_utils import UserProfile, get_current_user
+from ai_model import FashionAIModel
+from database import get_db
+from routers.ai_router import compute_gap_analysis
+
+logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter(prefix="/api/luna", tags=["Luna AI Orchestrator"])
 
-# ── Pydantic Request/Response Schemas ──────────────────────────────────────────
+
 class LunaChatRequest(BaseModel):
     message: str
     intent: str
+
 
 class LunaChatResponse(BaseModel):
     text: str
     outfits: Optional[List[Any]] = None
     gapAnalysis: Optional[dict] = None
 
-# ── Chat Routing Endpoint ──────────────────────────────────────────────────────
+
+def _wardrobe_items(user_id: str) -> List[dict]:
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT * FROM wardrobe_items WHERE user_id = ?", (user_id,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 @router.post("/chat", response_model=LunaChatResponse)
-async def handle_luna_chat(
-    payload: LunaChatRequest,
-    current_user: Any = Depends(get_current_user)  # Secures the endpoint with your JWT token
-):
-    """
-    Orchestrated natural language processing endpoint for the Luna styling interface.
-    Transforms raw algorithmic data structures into consumer-friendly chat payloads.
+async def handle_luna_chat(payload: LunaChatRequest, current_user: UserProfile = Depends(get_current_user)):
+    """Luna chat turn for the signed-in user.
+
+    Failures are real HTTP errors (never a friendly 200), so callers such as the
+    ORVYNE gateway can tell a real answer from a failure.
     """
     intent = payload.intent.lower().strip()
-    user_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
+    user_id = current_user.user_id
 
-    # ── 1. Outfit Curation Pipeline ───────────────────────────────────────────
     if intent == "outfit-help":
+        items = _wardrobe_items(user_id)
+        if not items:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Your wardrobe is empty: add items before asking for outfits")
         try:
-            # Connect direct to your internal backend algorithm processing layer
-            # Passing None or empty fallback defaults if user has no explicit anchor items
-            raw_curation = await curate_outfits_engine(user_id=user_id)
-            
-            return LunaChatResponse(
-                text=f"I've computed some layout combinations based on your current closet vectors. Let's start with these options:",
-                outfits=raw_curation.get("outfits", [])
-            )
+            outfits = await FashionAIModel.generate_outfits_from_wardrobe(items)
         except Exception as e:
-            # Graceful error handling degradation fallback
-            return LunaChatResponse(
-                text="I noticed your closet metrics aren't populated yet! Head over to the main app dashboard, snap a quick photo of your favorite top, and I'll assemble some styles.",
-                outfits=[]
-            )
+            logger.error("Luna outfit-help failed user=%s: %s", user_id[:8], e)
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Outfit generation failed")
+        if not outfits:
+            # The outfit model returns [] when it is unavailable or finds no combination.
+            return LunaChatResponse(text=f"I could not put together an outfit from your {len(items)} items yet.", outfits=[])
+        return LunaChatResponse(text=f"Here are {len(outfits)} outfit ideas from your {len(items)} wardrobe items.", outfits=outfits)
 
-    # ── 2. Structural Wardrobe Gap Analysis Pipeline ──────────────────────────
-    elif intent == "gap-analysis":
+    if intent == "gap-analysis":
         try:
-            # Query your internal vector/analytics database modules
-            raw_gaps = await gap_analysis_engine(user_id=user_id)
-            
-            return LunaChatResponse(
-                text=raw_gaps.get("summary", "Here is a breakdown of target areas where your wardrobe lacks coverage for your current aesthetic profile:"),
-                gapAnalysis=raw_gaps
-            )
+            gaps = await compute_gap_analysis(current_user, {})
+        except HTTPException:
+            raise
         except Exception as e:
-            return LunaChatResponse(
-                text="I couldn't run a complete scan on your clothing metrics right now. Give it another try in a moment!",
-                gapAnalysis={"gaps": [], "wardrobeCount": 0}
-            )
-
-    # ── 3. Fallback Exception ──────────────────────────────────────────────────
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Intent tracking configuration '{intent}' is not routed natively within the Luna pipeline."
+            logger.error("Luna gap-analysis failed user=%s: %s", user_id[:8], e)
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Gap analysis failed")
+        return LunaChatResponse(
+            text=f"I found {len(gaps.get('gaps', []))} gaps across {gaps.get('wardrobeCount', 0)} items.",
+            gapAnalysis=gaps,
         )
+
+    raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unsupported intent '{intent}'. Supported: outfit-help, gap-analysis")

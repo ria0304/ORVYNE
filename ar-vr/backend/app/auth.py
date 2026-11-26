@@ -46,6 +46,7 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
 
+
 # ── Passwords ─────────────────────────────────────────────────────────────────
 
 def hash_password(password: str) -> str:

@@ -1,10 +1,4 @@
-"""ar-vr Integration Layer — Python dependencies.
-
-Core dependencies for the ar-vr FastAPI integration backend.
-"""
-
-from __future__ import annotations
-
+# ORVYNE ar-vr integration backend — Python dependencies
 fastapi
 uvicorn[standard]
 pydantic

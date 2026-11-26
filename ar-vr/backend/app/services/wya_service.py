@@ -19,7 +19,15 @@ from ..schemas import (
 )
 
 # WYA backend base URL
-from ..config import WYA_BASE_URL as WYA_BASE  # configured via config.WYA_BASE_URL in production
+from ..config import WYA_BASE_URL as WYA_BASE
+from ..request_context import client_ip_var  # configured via config.WYA_BASE_URL in production
+
+
+async def _forward_client_ip(request: httpx.Request) -> None:
+    """Tell WYA which user's browser this call is for, so its per-IP rate limits are per user."""
+    ip = client_ip_var.get()
+    if ip:
+        request.headers["X-Forwarded-For"] = ip
 
 
 class WYAService:
@@ -27,7 +35,7 @@ class WYAService:
 
     def __init__(self, base_url: str | None = None):
         self.base_url = base_url or WYA_BASE
-        self.client = httpx.AsyncClient(timeout=60.0)
+        self.client = httpx.AsyncClient(timeout=60.0, event_hooks={"request": [_forward_client_ip]})
 
     async def __aenter__(self):
         return self
@@ -116,6 +124,16 @@ class WYAService:
         response = await self.client.post(
             f"{self.base_url}/api/ai/curate-outfits",
             json={"items": items},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def scan_fabric(self, token: str, image: str) -> Dict[str, Any]:
+        """WYA's garment classifier (category, colour, fabric, pattern, name): `POST /api/ai/fabric-scan`."""
+        response = await self.client.post(
+            f"{self.base_url}/api/ai/fabric-scan",
+            json={"image": image},
             headers={"Authorization": f"Bearer {token}"},
         )
         response.raise_for_status()

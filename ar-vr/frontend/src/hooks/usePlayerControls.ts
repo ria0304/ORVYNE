@@ -12,6 +12,14 @@ export interface ControlHandlers {
   onTogglePerspective?: () => void
   /** Digits 1-9, zero-based slot. */
   onHotbar?: (slot: number) => void
+  /** I pressed: inventory. */
+  onInventory?: () => void
+  /** M pressed: minimap. */
+  onMinimap?: () => void
+  /** L pressed: talk to Luna. */
+  onLuna?: () => void
+  /** F3 pressed: coordinates. */
+  onCoords?: () => void
 }
 
 const isTyping = (t: EventTarget | null) => {
@@ -60,7 +68,13 @@ export function usePlayerControls(enabled: boolean, handlers: ControlHandlers): 
       if (e.code === 'F5' || e.code === 'KeyV') {
         e.preventDefault()
         latest.current.onTogglePerspective?.()
-      } else if (e.code === 'KeyR') latest.current.onRotate?.()
+      } else if (e.code === 'F3') {
+        e.preventDefault()
+        latest.current.onCoords?.()
+      } else if (e.code === 'KeyI') latest.current.onInventory?.()
+      else if (e.code === 'KeyM') latest.current.onMinimap?.()
+      else if (e.code === 'KeyL') latest.current.onLuna?.()
+      else if (e.code === 'KeyR') latest.current.onRotate?.()
       else if (e.code === 'KeyF') latest.current.onPlace?.()
       else if (/^Digit[1-9]$/.test(e.code)) latest.current.onHotbar?.(Number(e.code.slice(5)) - 1)
     }
